@@ -1,0 +1,12 @@
+run_id=20261106_141306_1034792
+date=2026-11-06T06:13:06Z
+host=cnode-33-43-52
+max_cores=48
+mpirun=mpirun (Open MPI) 4.1.4  
+mpi_bind=--map-by slot:PE=%T --bind-to core
+cxx=c++ (GCC) 12.2.0
+lscpu=Thread(s) per core:    1;Core(s) per socket:    48;Socket(s):             2;Model name:            AMD EPYC 7R13 Processor;
+pbs_jobid=1034792.venus01
+pbs_nodefile_lines=48
+params: REPS=5 PROF_REPS=3 LAUNCHES=2 DEPTH=6 F=28 N_STRONG=32000000 N_PER_RANK=1000000
+params: RANK_LIST=1 2 4 8 16 24 32 48 THREAD_LIST=1 2 4 8 16 24 32 48 HYB_THREADS=4 HYBRID_CORES=48 REAL_CSV=

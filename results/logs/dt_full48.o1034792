@@ -1,0 +1,252 @@
+rm -rf build
+g++ -O3 -std=c++17 -ffp-contract=off -Wall -Wextra -Wno-unknown-pragmas src/dt.cpp -o build/dt_serial
+mpicxx -O3 -std=c++17 -ffp-contract=off -Wall -Wextra -Wno-unknown-pragmas -DUSE_MPI -fopenmp src/dt.cpp -o build/dt_hybrid 
+reference (serial, level-wise): tree hash a504632eb023c5a8   N=200003 F=28 depth=6
+
+serial build, node-wise growth
+  PASS  serial growth=node
+MPI + OpenMP build
+  PASS  ranks=1 threads=1 growth=level omp=sample
+  PASS  ranks=1 threads=1 growth=level omp=feature
+  PASS  ranks=1 threads=1 growth=node omp=sample
+  PASS  ranks=1 threads=1 growth=node omp=feature
+  PASS  ranks=1 threads=2 growth=level omp=sample
+  PASS  ranks=1 threads=2 growth=level omp=feature
+  PASS  ranks=1 threads=2 growth=node omp=sample
+  PASS  ranks=1 threads=2 growth=node omp=feature
+  PASS  ranks=1 threads=4 growth=level omp=sample
+  PASS  ranks=1 threads=4 growth=level omp=feature
+  PASS  ranks=1 threads=4 growth=node omp=sample
+  PASS  ranks=1 threads=4 growth=node omp=feature
+  PASS  ranks=2 threads=1 growth=level omp=sample
+  PASS  ranks=2 threads=1 growth=level omp=feature
+  PASS  ranks=2 threads=1 growth=node omp=sample
+  PASS  ranks=2 threads=1 growth=node omp=feature
+  PASS  ranks=2 threads=2 growth=level omp=sample
+  PASS  ranks=2 threads=2 growth=level omp=feature
+  PASS  ranks=2 threads=2 growth=node omp=sample
+  PASS  ranks=2 threads=2 growth=node omp=feature
+  PASS  ranks=2 threads=4 growth=level omp=sample
+  PASS  ranks=2 threads=4 growth=level omp=feature
+  PASS  ranks=2 threads=4 growth=node omp=sample
+  PASS  ranks=2 threads=4 growth=node omp=feature
+  PASS  ranks=3 threads=1 growth=level omp=sample
+  PASS  ranks=3 threads=1 growth=level omp=feature
+  PASS  ranks=3 threads=1 growth=node omp=sample
+  PASS  ranks=3 threads=1 growth=node omp=feature
+  PASS  ranks=3 threads=2 growth=level omp=sample
+  PASS  ranks=3 threads=2 growth=level omp=feature
+  PASS  ranks=3 threads=2 growth=node omp=sample
+  PASS  ranks=3 threads=2 growth=node omp=feature
+  PASS  ranks=3 threads=4 growth=level omp=sample
+  PASS  ranks=3 threads=4 growth=level omp=feature
+  PASS  ranks=3 threads=4 growth=node omp=sample
+  PASS  ranks=3 threads=4 growth=node omp=feature
+  PASS  ranks=4 threads=1 growth=level omp=sample
+  PASS  ranks=4 threads=1 growth=level omp=feature
+  PASS  ranks=4 threads=1 growth=node omp=sample
+  PASS  ranks=4 threads=1 growth=node omp=feature
+  PASS  ranks=4 threads=2 growth=level omp=sample
+  PASS  ranks=4 threads=2 growth=level omp=feature
+  PASS  ranks=4 threads=2 growth=node omp=sample
+  PASS  ranks=4 threads=2 growth=node omp=feature
+  PASS  ranks=4 threads=4 growth=level omp=sample
+  PASS  ranks=4 threads=4 growth=level omp=feature
+  PASS  ranks=4 threads=4 growth=node omp=sample
+  PASS  ranks=4 threads=4 growth=node omp=feature
+CSV input path (same data written to CSV and read back)
+  PASS  csv ranks=1 threads=2
+  PASS  csv ranks=3 threads=2
+  PASS  csv serial
+
+52 / 52 configurations identical to the reference
+[run_matrix] RUN_ID=20261106_141306_1034792  MAX_CORES=48  results -> /home/svu/huangjenchien/instacart_dt/results
+[run_matrix] === strong -> /home/svu/huangjenchien/instacart_dt/results/raw/strong_20261106_141306_1034792.csv
+  ok  strong_serial serial
+  ok  strong_serial serial
+  ok  strong_mpi ranks=1 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=1 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=2 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=2 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=4 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=4 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=8 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=8 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=16 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=16 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=24 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=24 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=32 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=32 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=48 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=48 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_mpi ranks=1 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=1 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=2 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=2 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=4 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=4 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=8 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=8 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=16 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=16 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=24 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=24 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=32 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=32 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=48 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_mpi ranks=48 threads=1 profile=1 level/sample (3 rows)
+  ok  strong_thr ranks=1 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=1 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=2 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=2 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=4 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=4 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=8 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=8 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=16 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=16 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=24 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=24 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=32 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=32 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=48 profile=0 level/sample (5 rows)
+  ok  strong_thr ranks=1 threads=48 profile=0 level/sample (5 rows)
+  ok  strong_hyb4 ranks=1 threads=4 profile=0 level/sample (5 rows)
+  ok  strong_hyb4 ranks=1 threads=4 profile=0 level/sample (5 rows)
+  ok  strong_hyb4 ranks=2 threads=4 profile=0 level/sample (5 rows)
+  ok  strong_hyb4 ranks=2 threads=4 profile=0 level/sample (5 rows)
+  ok  strong_hyb4 ranks=4 threads=4 profile=0 level/sample (5 rows)
+  ok  strong_hyb4 ranks=4 threads=4 profile=0 level/sample (5 rows)
+  ok  strong_hyb4 ranks=8 threads=4 profile=0 level/sample (5 rows)
+  ok  strong_hyb4 ranks=8 threads=4 profile=0 level/sample (5 rows)
+  [skip] strong_hyb4 ranks=16 threads=4 needs 64 > 48 cores
+  [skip] strong_hyb4 ranks=24 threads=4 needs 96 > 48 cores
+  [skip] strong_hyb4 ranks=32 threads=4 needs 128 > 48 cores
+  [skip] strong_hyb4 ranks=48 threads=4 needs 192 > 48 cores
+  ok  strong_hyb4 ranks=1 threads=4 profile=1 level/sample (3 rows)
+  ok  strong_hyb4 ranks=1 threads=4 profile=1 level/sample (3 rows)
+  ok  strong_hyb4 ranks=2 threads=4 profile=1 level/sample (3 rows)
+  ok  strong_hyb4 ranks=2 threads=4 profile=1 level/sample (3 rows)
+  ok  strong_hyb4 ranks=4 threads=4 profile=1 level/sample (3 rows)
+  ok  strong_hyb4 ranks=4 threads=4 profile=1 level/sample (3 rows)
+  ok  strong_hyb4 ranks=8 threads=4 profile=1 level/sample (3 rows)
+  ok  strong_hyb4 ranks=8 threads=4 profile=1 level/sample (3 rows)
+  [skip] strong_hyb4 ranks=16 threads=4 needs 64 > 48 cores
+  [skip] strong_hyb4 ranks=24 threads=4 needs 96 > 48 cores
+  [skip] strong_hyb4 ranks=32 threads=4 needs 128 > 48 cores
+  [skip] strong_hyb4 ranks=48 threads=4 needs 192 > 48 cores
+[run_matrix] === weak -> /home/svu/huangjenchien/instacart_dt/results/raw/weak_20261106_141306_1034792.csv
+  ok  weak_mpi ranks=1 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=1 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=1 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=1 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=2 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=2 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=2 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=2 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=4 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=4 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=4 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=4 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=8 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=8 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=8 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=8 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=16 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=16 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=16 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=16 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=24 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=24 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=24 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=24 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=32 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=32 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=32 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=32 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=48 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=48 threads=1 profile=0 level/sample (5 rows)
+  ok  weak_mpi ranks=48 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_mpi ranks=48 threads=1 profile=1 level/sample (3 rows)
+  ok  weak_hyb4 ranks=1 threads=4 profile=0 level/sample (5 rows)
+  ok  weak_hyb4 ranks=1 threads=4 profile=0 level/sample (5 rows)
+  ok  weak_hyb4 ranks=2 threads=4 profile=0 level/sample (5 rows)
+  ok  weak_hyb4 ranks=2 threads=4 profile=0 level/sample (5 rows)
+  ok  weak_hyb4 ranks=4 threads=4 profile=0 level/sample (5 rows)
+  ok  weak_hyb4 ranks=4 threads=4 profile=0 level/sample (5 rows)
+  ok  weak_hyb4 ranks=8 threads=4 profile=0 level/sample (5 rows)
+  ok  weak_hyb4 ranks=8 threads=4 profile=0 level/sample (5 rows)
+  [skip] weak_hyb4 ranks=16 threads=4 needs 64 > 48 cores
+  [skip] weak_hyb4 ranks=24 threads=4 needs 96 > 48 cores
+  [skip] weak_hyb4 ranks=32 threads=4 needs 128 > 48 cores
+  [skip] weak_hyb4 ranks=48 threads=4 needs 192 > 48 cores
+[run_matrix] === hybrid -> /home/svu/huangjenchien/instacart_dt/results/raw/hybrid_20261106_141306_1034792.csv
+  ok  hybrid_fixed ranks=48 threads=1 profile=0 level/sample (5 rows)
+  ok  hybrid_fixed ranks=48 threads=1 profile=0 level/sample (5 rows)
+  ok  hybrid_fixed ranks=48 threads=1 profile=1 level/sample (3 rows)
+  ok  hybrid_fixed ranks=48 threads=1 profile=1 level/sample (3 rows)
+  ok  hybrid_fixed ranks=24 threads=2 profile=0 level/sample (5 rows)
+  ok  hybrid_fixed ranks=24 threads=2 profile=0 level/sample (5 rows)
+  ok  hybrid_fixed ranks=24 threads=2 profile=1 level/sample (3 rows)
+  ok  hybrid_fixed ranks=24 threads=2 profile=1 level/sample (3 rows)
+  ok  hybrid_fixed ranks=12 threads=4 profile=0 level/sample (5 rows)
+  ok  hybrid_fixed ranks=12 threads=4 profile=0 level/sample (5 rows)
+  ok  hybrid_fixed ranks=12 threads=4 profile=1 level/sample (3 rows)
+  ok  hybrid_fixed ranks=12 threads=4 profile=1 level/sample (3 rows)
+  ok  hybrid_fixed ranks=6 threads=8 profile=0 level/sample (5 rows)
+  ok  hybrid_fixed ranks=6 threads=8 profile=0 level/sample (5 rows)
+  ok  hybrid_fixed ranks=6 threads=8 profile=1 level/sample (3 rows)
+  ok  hybrid_fixed ranks=6 threads=8 profile=1 level/sample (3 rows)
+  ok  hybrid_fixed ranks=3 threads=16 profile=0 level/sample (5 rows)
+  ok  hybrid_fixed ranks=3 threads=16 profile=0 level/sample (5 rows)
+  ok  hybrid_fixed ranks=3 threads=16 profile=1 level/sample (3 rows)
+  ok  hybrid_fixed ranks=3 threads=16 profile=1 level/sample (3 rows)
+[run_matrix] === design -> /home/svu/huangjenchien/instacart_dt/results/raw/design_20261106_141306_1034792.csv
+  ok  design ranks=48 threads=1 profile=0 node/sample (5 rows)
+  ok  design ranks=48 threads=1 profile=0 node/sample (5 rows)
+  ok  design ranks=48 threads=1 profile=1 node/sample (3 rows)
+  ok  design ranks=48 threads=1 profile=1 node/sample (3 rows)
+  ok  design ranks=48 threads=1 profile=0 node/feature (5 rows)
+  ok  design ranks=48 threads=1 profile=0 node/feature (5 rows)
+  ok  design ranks=48 threads=1 profile=1 node/feature (3 rows)
+  ok  design ranks=48 threads=1 profile=1 node/feature (3 rows)
+  ok  design ranks=48 threads=1 profile=0 level/sample (5 rows)
+  ok  design ranks=48 threads=1 profile=0 level/sample (5 rows)
+  ok  design ranks=48 threads=1 profile=1 level/sample (3 rows)
+  ok  design ranks=48 threads=1 profile=1 level/sample (3 rows)
+  ok  design ranks=48 threads=1 profile=0 level/feature (5 rows)
+  ok  design ranks=48 threads=1 profile=0 level/feature (5 rows)
+  ok  design ranks=48 threads=1 profile=1 level/feature (3 rows)
+  ok  design ranks=48 threads=1 profile=1 level/feature (3 rows)
+  ok  design ranks=12 threads=4 profile=0 node/sample (5 rows)
+  ok  design ranks=12 threads=4 profile=0 node/sample (5 rows)
+  ok  design ranks=12 threads=4 profile=1 node/sample (3 rows)
+  ok  design ranks=12 threads=4 profile=1 node/sample (3 rows)
+  ok  design ranks=12 threads=4 profile=0 node/feature (5 rows)
+  ok  design ranks=12 threads=4 profile=0 node/feature (5 rows)
+  ok  design ranks=12 threads=4 profile=1 node/feature (3 rows)
+  ok  design ranks=12 threads=4 profile=1 node/feature (3 rows)
+  ok  design ranks=12 threads=4 profile=0 level/sample (5 rows)
+  ok  design ranks=12 threads=4 profile=0 level/sample (5 rows)
+  ok  design ranks=12 threads=4 profile=1 level/sample (3 rows)
+  ok  design ranks=12 threads=4 profile=1 level/sample (3 rows)
+  ok  design ranks=12 threads=4 profile=0 level/feature (5 rows)
+  ok  design ranks=12 threads=4 profile=0 level/feature (5 rows)
+  ok  design ranks=12 threads=4 profile=1 level/feature (3 rows)
+  ok  design ranks=12 threads=4 profile=1 level/feature (3 rows)
+[run_matrix] done. Next: python3 analysis/plot_results.py --raw /home/svu/huangjenchien/instacart_dt/results/raw
+      ======================================================================================
+     Resource Usage on 2026-11-06 14:33:11.861068:
+     JobId: 1034792.venus01  				 Project: _pbs_project_default 
+     Submission Host: atlas8-c01 
+     Exit Status: 0
+     NCPUs Requested: 48 				 NCPUs Used: 48
+     Memory Requested: 40gb 				 Memory Used: 4834292kb 
+     Vmem Used: 56947444kb
+     CPU Time Used: 03:10:47 
+     Walltime requested: 04:00:00 			 Walltime Used: 00:22:15
+     Submit Time:  Fri Nov  6 14:10:55 2026 		 Start Time: Fri Nov  6 14:10:56 2026 
+     End Time: Fri Nov  6 14:33:11 2026 
+     Execution Nodes Used: (cnode-33-43-52:ncpus=48)
+     ======================================================================================

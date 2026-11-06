@@ -1,0 +1,67 @@
+#!/bin/bash
+#PBS -N dt_scaling_256
+#PBS -q normal
+#PBS -l select=4:ncpus=64:mpiprocs=16:ompthreads=4
+#PBS -l walltime=02:00:00
+#PBS -j oe
+
+# ==========================================================
+# NUS HPC (Atlas / Vanda) PBS Pro 批次排程腳本 (衝刺 256 核心)
+# 總核心數 = 4 nodes * 64 cpus = 256 Cores
+# ==========================================================
+
+cd $PBS_O_WORKDIR
+
+# 載入 NUS HPC 環境模組
+if [ -f /app1/ebenv ]; then
+    source /app1/ebenv
+fi
+
+module load OpenMPI/4.1.4-GCC-12.2.0 || module load openmpi
+
+echo "=== 開始在計算節點編譯專案 ==="
+make clean && make all
+
+DATA_FILE="instacart_clean.csv"
+OUT_CSV="scaling_results_pbs.csv"
+
+echo "cores,mpi_ranks,omp_threads,total_time,comm_time,speedup" > $OUT_CSV
+
+# 1. 跑序列版 (基準時間 T_serial)
+echo "=== 正在執行 Serial 基準版 ==="
+SERIAL_LOG=$(./tree_serial $DATA_FILE 6)
+T_SERIAL=$(echo "$SERIAL_LOG" | grep "訓練時間" | awk '{print $3}')
+echo "1,1,1,$T_SERIAL,0.0,1.0" >> $OUT_CSV
+echo "Serial 基準時間: $T_SERIAL 秒"
+
+# 2. 測試不同核心規模 (最高至 256 核)
+CORE_CONFIGS=(
+    "2 1"    # 2 核
+    "4 1"    # 4 核
+    "8 1"    # 8 核
+    "8 2"    # 16 核
+    "16 2"   # 32 核
+    "16 4"   # 64 核
+    "32 4"   # 128 核
+    "64 4"   # 256 核
+)
+
+for CFG in "${CORE_CONFIGS[@]}"; do
+    RANKS=$(echo $CFG | awk '{print $1}')
+    THREADS=$(echo $CFG | awk '{print $2}')
+    TOTAL_CORES=$((RANKS * THREADS))
+
+    echo ">>> 正在測試總核心數: $TOTAL_CORES (MPI: $RANKS, OpenMP: $THREADS) <<<"
+    export OMP_NUM_THREADS=$THREADS
+
+    RUN_LOG=$(mpirun -np $RANKS ./tree_mpi_omp $DATA_FILE 6)
+    
+    TOTAL_TIME=$(echo "$RUN_LOG" | grep "總訓練時間" | awk '{print $3}')
+    COMM_TIME=$(echo "$RUN_LOG" | grep "MPI 通訊時間" | awk '{print $3}')
+    SPEEDUP=$(python3 -c "print(f'{$T_SERIAL / float(\"$TOTAL_TIME\"):.2f}')")
+
+    echo "$TOTAL_CORES,$RANKS,$THREADS,$TOTAL_TIME,$COMM_TIME,$SPEEDUP" >> $OUT_CSV
+    echo "    完成! 總時間: $TOTAL_TIME s, 通訊時間: $COMM_TIME s, 加速比: $SPEEDUP x"
+done
+
+echo "=== 256 核心測試結束！結果存於 $OUT_CSV ==="

@@ -1,0 +1,30 @@
+# Compiled binaries & object files
+build/
+bin/
+tree_serial
+tree_mpi_omp
+tree_cuda
+*.o
+*.out
+*.exe
+
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Cluster job temporary logs
+*.o[0-9]*
+*.e[0-9]*
+!results/logs/*
+
+# Temporary image outputs
+page-*.png
+new_page-*.png

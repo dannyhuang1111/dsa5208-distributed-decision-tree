@@ -1,0 +1,43 @@
+#!/bin/bash
+# PBS Pro job for NUS Atlas.  NOT TESTED on Atlas: run `scripts/job_scaling.pbs` with
+# EXPERIMENTS="smoke" first (a few minutes) and read results/logs before the big run.
+#
+#   qsub -v EXPERIMENTS="smoke" scripts/job_scaling.pbs                       # sanity
+#   qsub scripts/job_scaling.pbs                                              # strong weak hybrid design
+#
+# Things to check / fill in on the cluster (I could not verify them from here):
+#   * queue name         -> `gstat` / `qstat -Q`        (the -q line below)
+#   * cores per node     -> `pbsnodes -a | grep resources_available.ncpus`
+#   * rank placement     -> add --report-bindings to MPI_BIND for the smoke run and look at the log
+#
+# Atlas 'parallel' queue (checked 2026-11-06): resources_max.ncpus = 96 per job AND
+# max_run_res.ncpus = 96 per user, so 96 cores is the ceiling.  mpiprocs = ncpus makes
+# $PBS_NODEFILE list one line per core, which run_matrix.sh uses as MAX_CORES.
+#PBS -N dt_scaling
+#PBS -q parallel
+#PBS -l select=1:ncpus=96:mpiprocs=96
+#PBS -l walltime=04:00:00
+#PBS -j oe
+
+cd "$PBS_O_WORKDIR" || exit 1
+
+[ -f /app1/ebenv ] && source /app1/ebenv
+# foss/2022b = GCC 12.2.0 + OpenMPI 4.1.4 (checked on atlas8, 2026-11-06).
+# The default system g++ is 4.8.5 and cannot compile C++17, so this module is required.
+module load foss/2022b || { echo "no foss/2022b module"; exit 1; }
+
+make -f Makefile.dt clean all || exit 1
+
+# Correctness gate: refuse to benchmark a build that disagrees with the serial reference.
+N=200003 RANKS="1 2 3 4" THREADS="1 2 4" scripts/check_equivalence.sh || { echo "equivalence check FAILED, not benchmarking"; exit 1; }
+
+# Problem sizes (override with qsub -v ...).  Serial time at N_STRONG x F is the baseline.
+export N_STRONG=${N_STRONG:-64000000}
+export F=${F:-28}
+export N_PER_RANK=${N_PER_RANK:-2000000}
+export HYBRID_CORES=${HYBRID_CORES:-48}
+export HYB_THREADS=${HYB_THREADS:-4}
+export LAUNCHES=${LAUNCHES:-2}
+export REAL_CSV=${REAL_CSV:-}
+
+bash scripts/run_matrix.sh ${EXPERIMENTS:-strong weak hybrid design}

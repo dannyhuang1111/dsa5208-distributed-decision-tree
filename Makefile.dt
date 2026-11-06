@@ -1,0 +1,41 @@
+# Build for the histogram-based decision tree (src/dt.cpp).
+#   make -f Makefile.dt            -> build/dt_serial  build/dt_hybrid
+#   make -f Makefile.dt clean
+#
+# dt_serial : no MPI, no OpenMP  (the single-core baseline, same source)
+# dt_hybrid : MPI + OpenMP       (run with OMP_NUM_THREADS=1 for pure MPI)
+#
+# -ffp-contract=off: no fused multiply-add, so the gain comparisons evaluate the
+# same way in every build and the trees match bit for bit.
+BUILD     := build
+CXXFLAGS  ?= -O3 -std=c++17 -ffp-contract=off -Wall -Wextra -Wno-unknown-pragmas
+CXX       ?= g++
+MPICXX    ?= mpicxx
+OMPFLAGS  ?= -fopenmp
+LDOMP     ?=
+
+UNAME := $(shell uname -s)
+ifeq ($(UNAME),Darwin)
+  # Apple clang has no bundled OpenMP: use Homebrew's libomp (brew install libomp).
+  LIBOMP   ?= $(shell brew --prefix libomp 2>/dev/null || echo /opt/homebrew/opt/libomp)
+  CXX      := clang++
+  OMPFLAGS := -Xpreprocessor -fopenmp -I$(LIBOMP)/include
+  LDOMP    := -L$(LIBOMP)/lib -lomp
+  # conda's MPICH wrapper points at a compiler that is not installed; use clang++.
+  export MPICH_CXX ?= clang++
+endif
+
+all: $(BUILD)/dt_serial $(BUILD)/dt_hybrid
+
+$(BUILD)/dt_serial: src/dt.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+$(BUILD)/dt_hybrid: src/dt.cpp
+	@mkdir -p $(BUILD)
+	$(MPICXX) $(CXXFLAGS) -DUSE_MPI $(OMPFLAGS) $< -o $@ $(LDOMP)
+
+clean:
+	rm -rf $(BUILD)
+
+.PHONY: all clean

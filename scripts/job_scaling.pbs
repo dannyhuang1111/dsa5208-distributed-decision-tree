@@ -1,43 +1,50 @@
 #!/bin/bash
-# PBS Pro job for NUS Atlas.  NOT TESTED on Atlas: run `scripts/job_scaling.pbs` with
-# EXPERIMENTS="smoke" first (a few minutes) and read results/logs before the big run.
+# PBS Pro job for NUS Vanda.  NOT TESTED here: run with EXPERIMENTS="smoke"
+# first (a few minutes) and read results/logs before the big 256-core run.
 #
 #   qsub -v EXPERIMENTS="smoke" scripts/job_scaling.pbs                       # sanity
-#   qsub scripts/job_scaling.pbs                                              # strong weak hybrid design
+#   qsub scripts/job_scaling.pbs                                              # full run
 #
-# Things to check / fill in on the cluster (I could not verify them from here):
-#   * queue name         -> `gstat` / `qstat -Q`        (the -q line below)
-#   * cores per node     -> `pbsnodes -a | grep resources_available.ncpus`
-#   * rank placement     -> add --report-bindings to MPI_BIND for the smoke run and look at the log
+# CLUSTER-SPECIFIC values to CONFIRM on Vanda (cannot verify from here):
+#   * queue name         -> `qstat -Q`                        (the -q line below)
+#   * cores per node     -> `pbsnodes -a | grep ncpus`        (adjust select= below)
+#   * module name        -> `module avail` (GCC >= 9 + an MPI) (module load line)
+#   * rank placement     -> add --report-bindings to MPI_BIND for the smoke run
 #
-# Atlas 'parallel' queue (checked 2026-11-06): resources_max.ncpus = 96 per job AND
-# max_run_res.ncpus = 96 per user, so 96 cores is the ceiling.  mpiprocs = ncpus makes
-# $PBS_NODEFILE list one line per core, which run_matrix.sh uses as MAX_CORES.
+# 256 cores.  The select line asks for 256 cores total; set ncpus per chunk to
+# Vanda's cores-per-node and the chunk count so chunks*ncpus = 256.  Example
+# below assumes 64-core nodes (4 chunks x 64 = 256); change to match Vanda.
+# mpiprocs=ncpus makes $PBS_NODEFILE list one line per core (run_matrix.sh reads
+# it as MAX_CORES).
 #PBS -N dt_scaling
-#PBS -q parallel
-#PBS -l select=1:ncpus=96:mpiprocs=96
+#PBS -q normal
+#PBS -l select=4:ncpus=64:mpiprocs=64:mem=64gb
 #PBS -l walltime=04:00:00
 #PBS -j oe
 
 cd "$PBS_O_WORKDIR" || exit 1
 
 [ -f /app1/ebenv ] && source /app1/ebenv
-# foss/2022b = GCC 12.2.0 + OpenMPI 4.1.4 (checked on atlas8, 2026-11-06).
-# The default system g++ is 4.8.5 and cannot compile C++17, so this module is required.
-module load foss/2022b || { echo "no foss/2022b module"; exit 1; }
+# TODO: load Vanda's toolchain (GCC >=9 for C++17 + an MPI). foss/* bundles both.
+module load foss/2022b || { echo "fix the module load line for Vanda"; exit 1; }
 
 make -f Makefile.dt clean all || exit 1
 
 # Correctness gate: refuse to benchmark a build that disagrees with the serial reference.
 N=200003 RANKS="1 2 3 4" THREADS="1 2 4" scripts/check_equivalence.sh || { echo "equivalence check FAILED, not benchmarking"; exit 1; }
 
-# Problem sizes (override with qsub -v ...).  Serial time at N_STRONG x F is the baseline.
-export N_STRONG=${N_STRONG:-64000000}
-export F=${F:-28}
-export N_PER_RANK=${N_PER_RANK:-2000000}
-export HYBRID_CORES=${HYBRID_CORES:-48}
+# Problem sizes (override with qsub -v ...).  Sized for ~10 min longest run on a
+# cluster ~3x slower than the 48-core dev box; see EXPERIMENTS.md.
+export N_STRONG=${N_STRONG:-32000000}
+export F_SWEEP=${F_SWEEP:-"7 14 28 56"}
+export N_PER_RANK=${N_PER_RANK:-1000000}
+export RANK_LIST=${RANK_LIST:-"1 2 4 8 16 32 64 128 256"}
+export THREAD_LIST=${THREAD_LIST:-"1 2 4 8 16 32 64 128 256"}
+export HYBRID_CORES=${HYBRID_CORES:-256}
 export HYB_THREADS=${HYB_THREADS:-4}
-export LAUNCHES=${LAUNCHES:-2}
+export REPS=${REPS:-3}
+export LAUNCHES=${LAUNCHES:-1}
 export REAL_CSV=${REAL_CSV:-}
 
-bash scripts/run_matrix.sh ${EXPERIMENTS:-strong weak hybrid design}
+bash scripts/run_matrix.sh ${EXPERIMENTS:-serial_scan strong weak hybrid design}
+

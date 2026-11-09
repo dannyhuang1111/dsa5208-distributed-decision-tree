@@ -9,6 +9,10 @@
 #   * CUDA module name        -> `module avail cuda`            (the module load line)
 # The CPU job (job_scaling.pbs) uses queue 'parallel' and module foss/2022b;
 # the GPU queue and a CUDA module are usually different -- confirm both.
+#
+# KNOWN reference (NUS Atlas, same admin as Vanda): the CPU side used queue
+# 'parallel' + module foss/2022b. The GPU queue/module were not used on Atlas by
+# this project, so the values below are generic guesses -- confirm on Vanda.
 #PBS -N dt_gpu
 #PBS -q gpu
 #PBS -l select=1:ncpus=4:ngpus=1

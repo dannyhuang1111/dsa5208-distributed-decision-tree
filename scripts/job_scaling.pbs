@@ -16,6 +16,12 @@
 # below assumes 64-core nodes (4 chunks x 64 = 256); change to match Vanda.
 # mpiprocs=ncpus makes $PBS_NODEFILE list one line per core (run_matrix.sh reads
 # it as MAX_CORES).
+#
+# KNOWN-GOOD Atlas reference (NUS, same admin as Vanda -- likely similar; use if
+# the Vanda values below don't work):
+#   #PBS -q parallel
+#   #PBS -l select=1:ncpus=96:mpiprocs=96      # Atlas 'parallel' caps at 96 cores/user
+#   module load foss/2022b                      # GCC 12.2.0 + OpenMPI 4.1.4 (verified on atlas8)
 #PBS -N dt_scaling
 #PBS -q normal
 #PBS -l select=4:ncpus=64:mpiprocs=64:mem=64gb
@@ -26,6 +32,7 @@ cd "$PBS_O_WORKDIR" || exit 1
 
 [ -f /app1/ebenv ] && source /app1/ebenv
 # TODO: load Vanda's toolchain (GCC >=9 for C++17 + an MPI). foss/* bundles both.
+# Atlas used foss/2022b (GCC 12.2.0 + OpenMPI 4.1.4); try it on Vanda first.
 module load foss/2022b || { echo "fix the module load line for Vanda"; exit 1; }
 
 make -f Makefile.dt clean all || exit 1

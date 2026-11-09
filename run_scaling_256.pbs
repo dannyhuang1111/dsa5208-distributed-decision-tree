@@ -30,7 +30,7 @@ echo "cores,mpi_ranks,omp_threads,total_time,comm_time,speedup" > $OUT_CSV
 # 1. 跑序列版 (基準時間 T_serial)
 echo "=== 正在執行 Serial 基準版 ==="
 SERIAL_LOG=$(./tree_serial $DATA_FILE 6)
-T_SERIAL=$(echo "$SERIAL_LOG" | grep "訓練時間" | awk '{print $3}')
+T_SERIAL=$(echo "$SERIAL_LOG" | grep "訓練時間" | grep -oE '[0-9]+\.[0-9]+' | head -n 1)
 echo "1,1,1,$T_SERIAL,0.0,1.0" >> $OUT_CSV
 echo "Serial 基準時間: $T_SERIAL 秒"
 
@@ -56,8 +56,8 @@ for CFG in "${CORE_CONFIGS[@]}"; do
 
     RUN_LOG=$(mpirun -np $RANKS ./tree_mpi_omp $DATA_FILE 6)
     
-    TOTAL_TIME=$(echo "$RUN_LOG" | grep "總訓練時間" | awk '{print $3}')
-    COMM_TIME=$(echo "$RUN_LOG" | grep "MPI 通訊時間" | awk '{print $3}')
+    TOTAL_TIME=$(echo "$RUN_LOG" | grep "總訓練時間" | grep -oE '[0-9]+\.[0-9]+' | head -n 1)
+    COMM_TIME=$(echo "$RUN_LOG" | grep "MPI 通訊時間" | grep -oE '[0-9]+\.[0-9]+' | head -n 1)
     SPEEDUP=$(python3 -c "print(f'{$T_SERIAL / float(\"$TOTAL_TIME\"):.2f}')")
 
     echo "$TOTAL_CORES,$RANKS,$THREADS,$TOTAL_TIME,$COMM_TIME,$SPEEDUP" >> $OUT_CSV

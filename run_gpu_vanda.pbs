@@ -1,0 +1,27 @@
+#!/bin/bash
+#PBS -N dt_gpu_vanda
+#PBS -q gpu
+#PBS -j oe
+#PBS -l walltime=00:15:00
+#PBS -l select=1:ncpus=4:mpiprocs=1:ompthreads=4:ngpus=1
+
+# ==========================================================
+# NUS Vanda HPC 單張 GPU (A40) 批次排程腳本
+# ==========================================================
+
+cd $PBS_O_WORKDIR
+
+# 載入環境模組
+if [ -f /app1/ebenv ]; then
+    source /app1/ebenv
+fi
+
+module load cuda12.2/toolkit/12.2.2 2>/dev/null || module load cuda 2>/dev/null
+
+echo "=== 編譯 CUDA 程式碼 ==="
+nvcc -O3 -std=c++17 -Isrc src/tree_cuda.cu -o tree_cuda
+
+DATA_FILE="instacart_clean.csv"
+
+echo "=== 正在執行 CUDA GPU 測試 ==="
+./tree_cuda $DATA_FILE

@@ -6,8 +6,8 @@ tree_cuda
 *.out
 *.exe
 
-# Generated report PDF (archived reference PDF is kept)
-/report/report.pdf
+# Generated report PDF: the final PDF IS the deliverable, so it is tracked.
+# LaTeX intermediates are not.
 report/*.aux
 report/*.log
 report/*.out

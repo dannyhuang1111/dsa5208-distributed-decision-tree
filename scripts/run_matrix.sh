@@ -10,6 +10,8 @@
 #   results/raw/env_<RUN_ID>.txt             machine / MPI / compiler / parameters
 #
 # Experiments
+#   serial_scan  serial (1 core) runtime vs problem size: N (rows) at fixed F,
+#                and F (features) at fixed N  (varies BOTH dimensions)
 #   strong  fixed problem (N_STRONG x F): pure MPI, threads-only, MPI x HYB_THREADS threads
 #   weak    N grows with the core count (N_PER_RANK rows per rank, per core for hybrid)
 #   hybrid  fixed core count HYBRID_CORES, vary ranks x threads
@@ -41,6 +43,11 @@ THREAD_LIST=${THREAD_LIST:-"1 2 4 8 16 32 48 96"}
 HYB_THREADS=${HYB_THREADS:-4}
 HYBRID_CORES=${HYBRID_CORES:-48}
 REAL_CSV=${REAL_CSV:-}
+# serial_scan: rows swept at fixed F, and features swept at fixed N.
+SCAN_N=${SCAN_N:-"1000000 2000000 4000000 8000000 16000000 32000000"}
+SCAN_F_FIXED=${SCAN_F_FIXED:-28}
+SCAN_F=${SCAN_F:-"7 14 28 56 112 224"}
+SCAN_N_FIXED=${SCAN_N_FIXED:-8000000}
 TMO=${TMO:-1800}                       # seconds per launch (needs `timeout`)
 
 RUN_ID=${RUN_ID:-$(date +%Y%m%d_%H%M%S)}
@@ -121,6 +128,17 @@ exp_smoke() {
   launch smoke_hyb 2 2 1 level sample "${D[@]}"
 }
 
+# serial_scan  serial (1 core) runtime vs problem size, varying BOTH dimensions:
+#   N (rows) at fixed F, and F (features) at fixed N.  Cost per node is
+#   O(n_rows x F), so each sweep should be ~linear.  Serial build only.
+exp_serial_scan() {
+  begin serial_scan
+  local n f
+  for n in $SCAN_N; do launch_serial serial_scan --synthetic "$n" --features "$SCAN_F_FIXED"; done
+  for f in $SCAN_F; do launch_serial serial_scan --synthetic "$SCAN_N_FIXED" --features "$f"; done
+}
+
+
 exp_strong() {
   begin strong
   local D=(--synthetic "$N_STRONG" --features "$F")
@@ -182,8 +200,8 @@ exp_real() {
 [ $# -eq 0 ] && { sed -n '2,24p' "$0"; exit 1; }
 for e in "$@"; do
   case "$e" in
-    smoke) exp_smoke;; strong) exp_strong;; weak) exp_weak;; hybrid) exp_hybrid;; design) exp_design;; real) exp_real;;
-    all) exp_smoke; exp_strong; exp_weak; exp_hybrid; exp_design; exp_real;;
+    smoke) exp_smoke;; serial_scan) exp_serial_scan;; strong) exp_strong;; weak) exp_weak;; hybrid) exp_hybrid;; design) exp_design;; real) exp_real;;
+    all) exp_smoke; exp_serial_scan; exp_strong; exp_weak; exp_hybrid; exp_design; exp_real;;
     *) echo "unknown experiment '$e'"; exit 2;;
   esac
 done

@@ -1,0 +1,55 @@
+#!/bin/bash
+# PBS Pro job for the GPU (CUDA) arm.  Models scripts/job_scaling.pbs but asks
+# for a GPU node, builds src/tree_cuda.cu with nvcc, and runs the histogram
+# benchmark.  Submit with:   qsub scripts/job_gpu.pbs
+#
+# CLUSTER-SPECIFIC values to CHECK/FILL on the cluster (cannot verify from here):
+#   * GPU queue name          -> `qstat -Q` / cluster docs      (the -q line)
+#   * GPU resource syntax     -> cluster docs: ngpus=1 vs gpu=1  (the select line)
+#   * CUDA module name        -> `module avail cuda`            (the module load line)
+# The CPU job (job_scaling.pbs) uses queue 'parallel' and module foss/2022b;
+# the GPU queue and a CUDA module are usually different -- confirm both.
+#PBS -N dt_gpu
+#PBS -q gpu
+#PBS -l select=1:ncpus=4:ngpus=1
+#PBS -l walltime=00:30:00
+#PBS -j oe
+
+cd "$PBS_O_WORKDIR" || exit 1
+
+[ -f /app1/ebenv ] && source /app1/ebenv
+# TODO: load the cluster's CUDA toolkit module (name varies, e.g. CUDA/12.x).
+module load cuda || module load CUDA || { echo "no cuda module -- fix the module load line"; exit 1; }
+# A host C++17 compiler for the serial baseline comparison (foss gives GCC 12).
+module load foss/2022b 2>/dev/null || true
+
+# Build the GPU binary and the serial baseline (for the GPU-vs-CPU comparison).
+make -f Makefile.dt cuda || { echo "nvcc build failed"; exit 1; }
+make -f Makefile.dt build/dt_serial || true
+
+N=${N:-32000000}
+F=${F:-28}
+REPS=${REPS:-3}
+
+RUN_ID=${RUN_ID:-$(date +%Y%m%d_%H%M%S)}
+[ -n "${PBS_JOBID:-}" ] && RUN_ID="${RUN_ID}_${PBS_JOBID%%.*}"
+RAW=results/raw; LOGS=results/logs
+mkdir -p "$RAW" "$LOGS"
+GPU_CSV="$RAW/gpu_${RUN_ID}.csv"
+LOG="$LOGS/gpu_${RUN_ID}.log"
+
+echo "run_id=$RUN_ID N=$N F=$F reps=$REPS" | tee "$LOG"
+nvidia-smi 2>&1 | head -15 | tee -a "$LOG" || true
+
+# GPU run.  RESULT_GPU line -> gpu CSV; full output -> log.
+./build/dt_cuda --synthetic "$N" --features "$F" --reps "$REPS" 2>>"$LOG" | tee -a "$LOG" | grep '^RESULT_GPU,' > "$GPU_CSV"
+
+# Serial baseline on the SAME problem, for the GPU-vs-one-core comparison.
+if [ -x build/dt_serial ]; then
+  echo "--- serial baseline (same N,F) ---" | tee -a "$LOG"
+  ./build/dt_serial --synthetic "$N" --features "$F" --reps "$REPS" --quiet 2>>"$LOG" | tee -a "$LOG" | grep '^RESULT,' >> "$GPU_CSV"
+fi
+
+echo "GPU results -> $GPU_CSV"
+echo "Compare: dt_cuda t_kernel/t_total vs the serial RESULT t_total, and vs a"
+echo "full MPI+OpenMP node from the strong-scaling run (results/raw/strong_*.csv)."

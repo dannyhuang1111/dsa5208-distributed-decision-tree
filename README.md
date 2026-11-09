@@ -16,6 +16,7 @@ being rewritten and is **not** yet integrated (see *Status* below).
 
 ```bash
 make -f Makefile.dt            # -> build/dt_serial  build/dt_hybrid
+make -f Makefile.dt cuda       # -> build/dt_cuda    (GPU; needs nvcc)
 ```
 
 * Linux / Atlas: needs `g++` (C++17) and an MPI wrapper (`module load foss/2022b`
@@ -109,8 +110,13 @@ preprocess.py           # Instacart -> instacart_clean.csv (or synthetic fallbac
 ## Status
 
 * Serial, pure-MPI, and MPI+OpenMP: complete and validated.
+* CUDA (`src/tree_cuda.cu`): rewritten to build the same histogram as the CPU and
+  benchmark it on one GPU. Its host-side data generation, binning and split scan
+  are verified to pick the same root split as `dt_serial`; the kernel itself has
+  not yet been compiled/run (no GPU on the dev machine) -- run `scripts/job_gpu.pbs`
+  to verify and benchmark on the cluster.
 * Benchmarks in `results/` are from a 48-core Atlas run on synthetic data;
-  256-core runs and the GPU (CUDA) arm are in progress.
+  256-core runs and the GPU benchmark are in progress.
 * Real-data run on `instacart_clean.csv`: serial trains to ~68.5% accuracy
   (majority-class baseline is 66.2%).
 

@@ -96,5 +96,7 @@ data for all scaling studies.
 
 - CPU configs (serial, pure MPI, MPI+OpenMP): `scripts/run_matrix.sh`, driven on
   the cluster by `scripts/job_scaling.pbs` (`qsub`).
-- CUDA: `scripts/job_gpu.pbs` on a GPU node (to be added with the rewrite).
+- CUDA: build with `make -f Makefile.dt cuda` (needs nvcc); run on a GPU node via
+  `scripts/job_gpu.pbs` (`qsub`). It also runs the serial baseline on the same
+  N,F so the GPU-vs-one-core comparison is in the same CSV (`results/raw/gpu_*.csv`).
 - Plots/tables: `python3 analysis/plot_results.py --raw results/raw`.

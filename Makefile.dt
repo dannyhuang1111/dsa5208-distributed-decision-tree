@@ -35,7 +35,17 @@ $(BUILD)/dt_hybrid: src/dt.cpp
 	@mkdir -p $(BUILD)
 	$(MPICXX) $(CXXFLAGS) -DUSE_MPI $(OMPFLAGS) $< -o $@ $(LDOMP)
 
+# GPU arm.  Built separately (needs nvcc / a CUDA toolkit); not part of `all`
+# so the CPU nodes, which have no nvcc, still build cleanly.
+#   make -f Makefile.dt cuda
+NVCC      ?= nvcc
+NVCCFLAGS ?= -O3 -std=c++17
+cuda: $(BUILD)/dt_cuda
+$(BUILD)/dt_cuda: src/tree_cuda.cu
+	@mkdir -p $(BUILD)
+	$(NVCC) $(NVCCFLAGS) $< -o $@
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean
+.PHONY: all clean cuda

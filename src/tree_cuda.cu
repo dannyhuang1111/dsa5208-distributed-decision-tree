@@ -1,143 +1,296 @@
+// ============================================================================
+//  tree_cuda.cu -- GPU (CUDA) arm of the MPI+X study.
+//
+//  Rubric: X = OpenMP, so we must also test on >= 1 GPU.  This standalone
+//  program runs the decision-tree HOT PATH on the GPU: building the per-feature
+//  histogram [count, positive-count] that the CPU code (src/dt.cpp) builds, and
+//  finding the best Gini split from it.  It is deliberately NOT MPI -- the
+//  MPI+X requirement is met by the MPI+OpenMP build; this is the required GPU
+//  demonstration, benchmarked against the CPU.
+//
+//  To stay directly comparable with dt.cpp we reuse the SAME synthetic data
+//  generator, the SAME exact binning (<=256 distinct values per feature), and
+//  the SAME split-scan logic, so the GPU must pick the identical root split.
+//
+//  Build:  nvcc -O3 -std=c++17 src/tree_cuda.cu -o build/dt_cuda
+//  Run:    build/dt_cuda --synthetic 32000000 --features 28 [--seed 42] [--reps 3]
+//          build/dt_cuda --csv instacart_clean.csv
+//
+//  What it measures (printed as a RESULT_GPU line and human-readable summary):
+//    * t_h2d        host->device copy of the binned data + labels
+//    * t_kernel     the histogram-build kernel
+//    * t_d2h        device->host copy of the histogram
+//    * t_scan       host-side best-split scan (same code as dt.cpp)
+//    * best split   feature, threshold, gini gain  (for the correctness check)
+//
+//  NOTE: not compiled/tested on this machine (no nvcc/GPU here).  Verify on the
+//  GPU node:  it should report the same (feature, threshold) root split as
+//    build/dt_serial --synthetic N --features F --dump-tree -  (first split).
+// ============================================================================
 #include <cuda_runtime.h>
-#include <iostream>
-#include <vector>
 #include <algorithm>
 #include <chrono>
-#include <iomanip>
-#include "common.h"
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <string>
+#include <vector>
 
-#define CHECK_CUDA(call) { \
-    cudaError_t err = call; \
-    if (err != cudaSuccess) { \
-        std::cerr << "CUDA Error: " << cudaGetErrorString(err) << " at line " << __LINE__ << std::endl; \
-        exit(1); \
-    } \
+using std::string;
+using std::vector;
+typedef long long i64;
+
+#define CHECK_CUDA(call)                                                        \
+    do {                                                                        \
+        cudaError_t _e = (call);                                                \
+        if (_e != cudaSuccess) {                                                \
+            std::fprintf(stderr, "CUDA error %s at %s:%d\n",                    \
+                         cudaGetErrorString(_e), __FILE__, __LINE__);           \
+            std::exit(1);                                                       \
+        }                                                                       \
+    } while (0)
+
+static double now_sec() {
+    return std::chrono::duration<double>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
 
-// CUDA Kernel: 每個執行緒塊 (Thread Block) 負責一個特徵的切分搜尋，執行緒平行評估切分門檻
-__global__ void evaluate_split_kernel(const float* d_X, const int* d_y, 
-                                      int n_samples, int n_features, int feature_idx,
-                                      float candidate_thresh, 
-                                      int* d_left_pos, int* d_left_total) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= n_samples) return;
+// --------------------------------------------------------- synthetic data
+// Identical schema and generator to src/dt.cpp, so the GPU sees the same rows.
+static const int NDOM = 7;
+static const int DOM_LO[NDOM] = {1, 0, 0, 0, 1, 1, 1};
+static const int DOM_HI[NDOM] = {99, 6, 23, 30, 29, 134, 21};
 
-    float val = d_X[tid * n_features + feature_idx];
-    int label = d_y[tid];
+static inline uint64_t splitmix64(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
 
-    if (val <= candidate_thresh) {
-        atomicAdd(d_left_total, 1);
-        if (label == 1) {
-            atomicAdd(d_left_pos, 1);
+static inline int gen_row(uint64_t seed, uint64_t r, int F, int* vals) {
+    uint64_t s = splitmix64(seed ^ (r * 0xD6E8FEB86659FD93ULL + 0x1234567ULL));
+    for (int f = 0; f < F; f++) {
+        s = splitmix64(s);
+        int d = f % NDOM;
+        uint64_t range = (uint64_t)(DOM_HI[d] - DOM_LO[d] + 1);
+        vals[f] = DOM_LO[d] + (int)(s % range);
+    }
+    s = splitmix64(s);
+    double u = (double)(s >> 11) * (1.0 / 9007199254740992.0);
+    double p = 0.3 + 0.3 * (vals[4] <= 3) + 0.2 * (vals[3] == 7);
+    p = std::min(0.95, std::max(0.05, p));
+    return u < p ? 1 : 0;
+}
+
+// ------------------------------------------------------------------- bins
+// Per feature: a list of representative values (bin edges).  For the synthetic
+// generator these are exactly the domain values, so binning is exact and the
+// bin code is (value - DOM_LO[d]).  nb[f] bins per feature, off[f] is the base
+// offset of feature f in the flattened histogram.
+struct Bins {
+    int F = 0;
+    vector<int> nb, off;
+    vector<vector<float>> rep;
+    int total = 0;
+    void finalize() {
+        nb.assign(F, 0);
+        off.assign(F, 0);
+        total = 0;
+        for (int f = 0; f < F; f++) {
+            nb[f] = (int)rep[f].size();
+            off[f] = total;
+            total += nb[f];
         }
     }
+};
+
+// ------------------------------------------------------------- CUDA kernel
+// One thread per row.  Each thread walks its F features and atomically bumps the
+// [count, positive] pair of the (feature, bin) it lands in.  Histogram layout is
+// identical to dt.cpp: 2 ints per (feature,bin), feature f starting at 2*off[f].
+__global__ void histogram_kernel(const uint8_t* __restrict__ X,
+                                 const uint8_t* __restrict__ y, i64 n, int F,
+                                 const int* __restrict__ off, int* __restrict__ hist) {
+    i64 i = (i64)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    const uint8_t* row = X + i * F;
+    int yy = y[i];
+    for (int f = 0; f < F; f++) {
+        int* cell = hist + 2 * (off[f] + row[f]);
+        atomicAdd(&cell[0], 1);
+        atomicAdd(&cell[1], yy);
+    }
 }
 
-int main(int argc, char** argv) {
-    std::string data_file = "instacart_clean.csv";
-    if (argc > 1) data_file = argv[1];
+// ------------------------------------------------------- host-side scan
+// Same Gini and same candidate thresholds (midpoints of present bins) as dt.cpp.
+static inline double gini(i64 pos, i64 tot) {
+    if (tot == 0) return 0.0;
+    double p1 = (double)pos / (double)tot, p0 = 1.0 - p1;
+    return 1.0 - (p0 * p0 + p1 * p1);
+}
 
-    Dataset data;
-    if (!load_csv(data_file, data)) {
-        return 1;
-    }
+struct Split {
+    int f = -1;
+    float thr = 0.f;
+    double gain = -1.0;
+};
 
-    // 檢查 GPU 設備
-    int device_count = 0;
-    cudaGetDeviceCount(&device_count);
-    if (device_count == 0) {
-        std::cerr << "[-] 找不到支援 CUDA 的 GPU 設備！" << std::endl;
-        return 1;
-    }
-
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, 0);
-    std::cout << "========================================" << std::endl;
-    std::cout << " [CUDA] 單張 GPU 加速特徵切分搜尋" << std::endl;
-    std::cout << " GPU 設備: " << prop.name << std::endl;
-    std::cout << " 總全域記憶體: " << (prop.totalGlobalMem / (1024 * 1024)) << " MB" << std::endl;
-    std::cout << " 樣本數: " << data.n_samples << ", 特徵數: " << data.n_features << std::endl;
-    std::cout << "========================================" << std::endl;
-
-    // 配置 GPU 記憶體
-    float* d_X = nullptr;
-    int* d_y = nullptr;
-    int* d_left_pos = nullptr;
-    int* d_left_total = nullptr;
-
-    size_t x_bytes = data.n_samples * data.n_features * sizeof(float);
-    size_t y_bytes = data.n_samples * sizeof(int);
-
-    CHECK_CUDA(cudaMalloc(&d_X, x_bytes));
-    CHECK_CUDA(cudaMalloc(&d_y, y_bytes));
-    CHECK_CUDA(cudaMalloc(&d_left_pos, sizeof(int)));
-    CHECK_CUDA(cudaMalloc(&d_left_total, sizeof(int)));
-
-    // 將資料拷貝至 GPU
-    auto t_start = std::chrono::high_resolution_clock::now();
-    CHECK_CUDA(cudaMemcpy(d_X, data.X.data(), x_bytes, cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_y, data.y.data(), y_bytes, cudaMemcpyHostToDevice));
-
-    int global_pos = 0;
-    for (int y : data.y) if (y == 1) global_pos++;
-    int global_total = data.n_samples;
-    double current_gini = compute_gini(global_pos, global_total);
-
-    int threads_per_block = 256;
-    int blocks = (data.n_samples + threads_per_block - 1) / threads_per_block;
-
-    double best_gini_gain = -1.0;
-    int best_feature = -1;
-    float best_threshold = 0.0f;
-
-    // 測試遍歷所有特徵尋找最佳分裂 (模擬決策樹關鍵熱點)
-    for (int f = 0; f < data.n_features; f++) {
-        // 取 20 個百分位門檻進行評估
-        for (int step = 1; step <= 20; step++) {
-            float thresh = (float)step * 2.0f; // 候選門檻
-
-            CHECK_CUDA(cudaMemset(d_left_pos, 0, sizeof(int)));
-            CHECK_CUDA(cudaMemset(d_left_total, 0, sizeof(int)));
-
-            evaluate_split_kernel<<<blocks, threads_per_block>>>(
-                d_X, d_y, data.n_samples, data.n_features, f, thresh, d_left_pos, d_left_total
-            );
-            CHECK_CUDA(cudaDeviceSynchronize());
-
-            int h_left_pos = 0, h_left_total = 0;
-            CHECK_CUDA(cudaMemcpy(&h_left_pos, d_left_pos, sizeof(int), cudaMemcpyDeviceToHost));
-            CHECK_CUDA(cudaMemcpy(&h_left_total, d_left_total, sizeof(int), cudaMemcpyDeviceToHost));
-
-            if (h_left_total > 0 && h_left_total < global_total) {
-                int r_pos = global_pos - h_left_pos;
-                int r_tot = global_total - h_left_total;
-                double g_left = compute_gini(h_left_pos, h_left_total);
-                double g_right = compute_gini(r_pos, r_tot);
-                double gain = current_gini - (((double)h_left_total / global_total) * g_left + 
-                                             ((double)r_tot / global_total) * g_right);
-
-                if (gain > best_gini_gain) {
-                    best_gini_gain = gain;
-                    best_feature = f;
-                    best_threshold = thresh;
+static Split best_split(const int* h, const Bins& B, i64 tot, i64 pos) {
+    const double cur = gini(pos, tot);
+    Split best;
+    for (int f = 0; f < B.F; f++) {
+        const int nb = B.nb[f];
+        const int* hf = h + 2 * B.off[f];
+        i64 ltot = 0, lpos = 0;
+        int last = -1;
+        for (int b = 0; b < nb; b++) {
+            int c = hf[2 * b];
+            if (c == 0) continue;
+            if (last >= 0) {
+                i64 rtot = tot - ltot, rpos = pos - lpos;
+                double weighted = ((double)ltot / tot) * gini(lpos, ltot) +
+                                  ((double)rtot / tot) * gini(rpos, rtot);
+                double g = cur - weighted;
+                if (g > best.gain) {
+                    best.gain = g;
+                    best.f = f;
+                    best.thr = (B.rep[f][last] + B.rep[f][b]) / 2.0f;
                 }
             }
+            ltot += c;
+            lpos += hf[2 * b + 1];
+            last = b;
         }
     }
+    return best;
+}
 
-    auto t_end = std::chrono::high_resolution_clock::now();
-    double total_gpu_time = std::chrono::duration<double>(t_end - t_start).count();
+// ------------------------------------------------------------------- data
+struct Data {
+    i64 n = 0;
+    int F = 0;
+    vector<uint8_t> x, y;  // row-major n*F bin codes, and labels
+};
 
-    std::cout << "\n[+] GPU 運算完成！" << std::endl;
-    std::cout << "    GPU 執行時間: " << std::fixed << std::setprecision(4) << total_gpu_time << " 秒" << std::endl;
-    std::cout << "    最佳特徵: " << best_feature << " (門檻: " << best_threshold 
-              << ", Gini 增益: " << best_gini_gain << ")" << std::endl;
+static void make_synthetic(i64 N, int F, uint64_t seed, Data& D, Bins& B) {
+    D.n = N;
+    D.F = F;
+    D.x.resize((size_t)N * F);
+    D.y.resize((size_t)N);
+    B.F = F;
+    B.rep.assign(F, {});
+    for (int f = 0; f < F; f++) {
+        int d = f % NDOM;
+        for (int v = DOM_LO[d]; v <= DOM_HI[d]; v++) B.rep[f].push_back((float)v);
+    }
+    B.finalize();
+    int vals[256];
+    for (i64 i = 0; i < N; i++) {
+        int lab = gen_row(seed, (uint64_t)i, F, vals);
+        for (int f = 0; f < F; f++)
+            D.x[(size_t)i * F + f] = (uint8_t)(vals[f] - DOM_LO[f % NDOM]);
+        D.y[(size_t)i] = (uint8_t)lab;
+    }
+}
 
-    // 清理資源
-    cudaFree(d_X);
-    cudaFree(d_y);
-    cudaFree(d_left_pos);
-    cudaFree(d_left_total);
+// ------------------------------------------------------------------- main
+int main(int argc, char** argv) {
+    i64 N = 0;
+    int F = 28;
+    uint64_t seed = 42;
+    int reps = 3, warmup = 1;
+    for (int i = 1; i < argc; i++) {
+        string a = argv[i];
+        auto next = [&]() { return (i + 1 < argc) ? argv[++i] : nullptr; };
+        if (a == "--synthetic") N = atoll(next());
+        else if (a == "--features") F = atoi(next());
+        else if (a == "--seed") seed = strtoull(next(), nullptr, 10);
+        else if (a == "--reps") reps = atoi(next());
+        else if (a == "--warmup") warmup = atoi(next());
+        else { std::fprintf(stderr, "usage: dt_cuda --synthetic N [--features F] [--seed S] [--reps R]\n"); return 2; }
+    }
+    if (N <= 0 || F < 7 || F > 256) {
+        std::fprintf(stderr, "need --synthetic N (>0) and --features in 7..256\n");
+        return 2;
+    }
 
+    int dev = 0;
+    cudaDeviceProp prop;
+    CHECK_CUDA(cudaGetDeviceProperties(&prop, dev));
+
+    Data D;
+    Bins B;
+    make_synthetic(N, F, seed, D, B);
+
+    // Count global positives once on the host (cheap, not the hot path).
+    i64 pos = 0;
+    for (i64 i = 0; i < D.n; i++) pos += D.y[(size_t)i];
+    const i64 tot = D.n;
+    const size_t H = 2 * (size_t)B.total;  // ints in the histogram
+
+    // Device buffers.
+    uint8_t *dX = nullptr, *dY = nullptr;
+    int *dOff = nullptr, *dHist = nullptr;
+    CHECK_CUDA(cudaMalloc(&dX, (size_t)D.n * F));
+    CHECK_CUDA(cudaMalloc(&dY, (size_t)D.n));
+    CHECK_CUDA(cudaMalloc(&dOff, sizeof(int) * B.F));
+    CHECK_CUDA(cudaMalloc(&dHist, sizeof(int) * H));
+    CHECK_CUDA(cudaMemcpy(dOff, B.off.data(), sizeof(int) * B.F, cudaMemcpyHostToDevice));
+
+    const int TPB = 256;
+    const int blocks = (int)((D.n + TPB - 1) / TPB);
+    vector<int> hist((size_t)H);
+    Split last_split;
+
+    double t_h2d = 0, t_kernel = 0, t_d2h = 0, t_scan = 0;
+    for (int r = -warmup; r < reps; r++) {
+        bool timed = (r >= 0);
+
+        double t0 = now_sec();
+        CHECK_CUDA(cudaMemcpy(dX, D.x.data(), (size_t)D.n * F, cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(dY, D.y.data(), (size_t)D.n, cudaMemcpyHostToDevice));
+        if (timed) t_h2d += now_sec() - t0;
+
+        CHECK_CUDA(cudaMemset(dHist, 0, sizeof(int) * H));
+        CHECK_CUDA(cudaDeviceSynchronize());
+        t0 = now_sec();
+        histogram_kernel<<<blocks, TPB>>>(dX, dY, D.n, F, dOff, dHist);
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+        if (timed) t_kernel += now_sec() - t0;
+
+        t0 = now_sec();
+        CHECK_CUDA(cudaMemcpy(hist.data(), dHist, sizeof(int) * H, cudaMemcpyDeviceToHost));
+        if (timed) t_d2h += now_sec() - t0;
+
+        t0 = now_sec();
+        last_split = best_split(hist.data(), B, tot, pos);
+        if (timed) t_scan += now_sec() - t0;
+    }
+
+    t_h2d /= reps; t_kernel /= reps; t_d2h /= reps; t_scan /= reps;
+    double t_gpu_total = t_h2d + t_kernel + t_d2h + t_scan;
+
+    std::fprintf(stderr,
+                 "[dt_cuda] GPU=%s N=%lld F=%d bins=%d reps=%d\n"
+                 "  root split: feature=%d threshold=%.4g gini_gain=%.6f\n"
+                 "  t_h2d=%.6f  t_kernel=%.6f  t_d2h=%.6f  t_scan=%.6f  total=%.6f (s)\n",
+                 prop.name, (long long)N, F, B.total, reps,
+                 last_split.f, last_split.thr, last_split.gain,
+                 t_h2d, t_kernel, t_d2h, t_scan, t_gpu_total);
+
+    // Machine-readable line (compare against dt.cpp's serial/MPI timings).
+    std::printf("RESULT_GPU,cuda,%s,%lld,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%.4g,%.6f\n",
+                prop.name, (long long)N, F, B.total,
+                t_gpu_total, t_h2d, t_kernel, t_d2h, t_scan,
+                last_split.f, last_split.thr, last_split.gain);
+
+    cudaFree(dX); cudaFree(dY); cudaFree(dOff); cudaFree(dHist);
     return 0;
 }

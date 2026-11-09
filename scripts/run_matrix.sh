@@ -36,6 +36,9 @@ PROF_REPS=${PROF_REPS:-3}
 LAUNCHES=${LAUNCHES:-1}
 DEPTH=${DEPTH:-6}
 F=${F:-28}
+# F_SWEEP: feature counts swept in strong+weak scaling (shows scaling is F-stable).
+# Set F_SWEEP="28" to disable the sweep and run a single feature count.
+F_SWEEP=${F_SWEEP:-"7 14 28 56"}
 N_STRONG=${N_STRONG:-64000000}
 N_PER_RANK=${N_PER_RANK:-2000000}
 RANK_LIST=${RANK_LIST:-"1 2 4 8 16 32 48 64 96"}
@@ -141,25 +144,31 @@ exp_serial_scan() {
 
 exp_strong() {
   begin strong
-  local D=(--synthetic "$N_STRONG" --features "$F")
-  launch_serial strong_serial "${D[@]}"
-  local r t
-  for r in $RANK_LIST; do launch strong_mpi "$r" 1 0 level sample "${D[@]}"; done
-  for r in $RANK_LIST; do launch strong_mpi "$r" 1 1 level sample "${D[@]}"; done
-  for t in $THREAD_LIST; do launch strong_thr 1 "$t" 0 level sample "${D[@]}"; done
-  for r in $RANK_LIST; do launch "strong_hyb$HYB_THREADS" "$r" "$HYB_THREADS" 0 level sample "${D[@]}"; done
-  for r in $RANK_LIST; do launch "strong_hyb$HYB_THREADS" "$r" "$HYB_THREADS" 1 level sample "${D[@]}"; done
+  local r t fv
+  # F sweep: repeat the whole strong-scaling study at each feature count.  The
+  # F column in each RESULT row lets plot_results.py separate the curves.
+  for fv in $F_SWEEP; do
+    local D=(--synthetic "$N_STRONG" --features "$fv")
+    launch_serial strong_serial "${D[@]}"
+    for r in $RANK_LIST; do launch strong_mpi "$r" 1 0 level sample "${D[@]}"; done
+    for r in $RANK_LIST; do launch strong_mpi "$r" 1 1 level sample "${D[@]}"; done
+    for t in $THREAD_LIST; do launch strong_thr 1 "$t" 0 level sample "${D[@]}"; done
+    for r in $RANK_LIST; do launch "strong_hyb$HYB_THREADS" "$r" "$HYB_THREADS" 0 level sample "${D[@]}"; done
+    for r in $RANK_LIST; do launch "strong_hyb$HYB_THREADS" "$r" "$HYB_THREADS" 1 level sample "${D[@]}"; done
+  done
 }
 
 exp_weak() {
   begin weak
-  local r
-  for r in $RANK_LIST; do
-    launch weak_mpi "$r" 1 0 level sample --synthetic $((N_PER_RANK * r)) --features "$F"
-    launch weak_mpi "$r" 1 1 level sample --synthetic $((N_PER_RANK * r)) --features "$F"
-  done
-  for r in $RANK_LIST; do
-    launch "weak_hyb$HYB_THREADS" "$r" "$HYB_THREADS" 0 level sample --synthetic $((N_PER_RANK * r * HYB_THREADS)) --features "$F"
+  local r fv
+  for fv in $F_SWEEP; do
+    for r in $RANK_LIST; do
+      launch weak_mpi "$r" 1 0 level sample --synthetic $((N_PER_RANK * r)) --features "$fv"
+      launch weak_mpi "$r" 1 1 level sample --synthetic $((N_PER_RANK * r)) --features "$fv"
+    done
+    for r in $RANK_LIST; do
+      launch "weak_hyb$HYB_THREADS" "$r" "$HYB_THREADS" 0 level sample --synthetic $((N_PER_RANK * r * HYB_THREADS)) --features "$fv"
+    done
   done
 }
 

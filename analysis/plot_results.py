@@ -110,44 +110,50 @@ def serial_time(df, prefix, N, F):
 
 
 def strong_block(df, prefix, out, tables):
-    t = times(df, lambda x: x.startswith(prefix + "_") and not x.endswith("_serial"))
-    if t.empty:
+    t_all = times(df, lambda x: x.startswith(prefix + "_") and not x.endswith("_serial"))
+    if t_all.empty:
         print(f"[plot] {prefix}: no rows, skipped")
         return
-    N, F = int(t.N.iloc[0]), int(t.F.iloc[0])
-    ts, how = serial_time(df, prefix, N, F)
-    if ts is None:
-        print(f"[plot] {prefix}: no baseline, skipped")
-        return
-    t = t[(t.N == N) & (t.F == F)].copy()
-    t["speedup"] = ts / t["t"]
-    t["speedup_lo"] = ts / t["tmax"]
-    t["speedup_hi"] = ts / t["tmin"]
-    t["efficiency"] = t["speedup"] / t["cores"]
-    tables[f"{prefix}_scaling"] = t.assign(t_serial=ts).sort_values(["tag", "cores"])
+    # One figure/table per (N, F) present, so an F-sweep produces one curve set
+    # per feature count instead of silently keeping only the first.
+    combos = t_all[["N", "F"]].drop_duplicates().sort_values(["N", "F"]).to_numpy().tolist()
+    multi = len(combos) > 1
+    for N, F in combos:
+        N, F = int(N), int(F)
+        ts, how = serial_time(df, prefix, N, F)
+        if ts is None:
+            print(f"[plot] {prefix} N={N} F={F}: no baseline, skipped")
+            continue
+        t = t_all[(t_all.N == N) & (t_all.F == F)].copy()
+        t["speedup"] = ts / t["t"]
+        t["speedup_lo"] = ts / t["tmax"]
+        t["speedup_hi"] = ts / t["tmin"]
+        t["efficiency"] = t["speedup"] / t["cores"]
+        suffix = f"_F{F}" if multi else ""
+        tables[f"{prefix}_scaling{suffix}"] = t.assign(t_serial=ts).sort_values(["tag", "cores"])
 
-    fig, ax = plt.subplots(1, 2, figsize=(12, 4.6))
-    for tag, g in t.groupby("tag"):
-        g = g.sort_values("cores")
-        yerr = [g.speedup - g.speedup_lo, g.speedup_hi - g.speedup]
-        ax[0].errorbar(g.cores, g.speedup, yerr=yerr, marker="o", capsize=3, label=label_of(tag))
-        ax[1].plot(g.cores, g.efficiency * 100, marker="o", label=label_of(tag))
-    cmax = t.cores.max()
-    xs = np.array([1, cmax])
-    ax[0].plot(xs, xs, "k--", lw=1, label="ideal")
-    ax[0].set(xscale="log", yscale="log", xlabel="cores (ranks x threads)", ylabel=f"speedup vs serial ({ts:.3f} s)",
-              title=f"Strong scaling, N={N:,}, F={F}")
-    ax[1].axhline(100, color="k", ls="--", lw=1)
-    ax[1].set(xscale="log", xlabel="cores (ranks x threads)", ylabel="parallel efficiency (%)", title="Efficiency", ylim=(0, 115))
-    plain_log_axes(ax[0], t.cores, y=True)
-    plain_log_axes(ax[1], t.cores)
-    for a in ax:
-        a.grid(alpha=0.3, which="both")
-    ax[0].legend(fontsize=8)
-    fig.text(0.01, 0.005, f"baseline: {how}.  Data: {', '.join(sorted(df[df.tag.str.startswith(prefix)].file.unique()))}", fontsize=6, color="gray")
-    fig.tight_layout()
-    fig.savefig(os.path.join(out, f"{prefix}_scaling.png"), dpi=200)
-    plt.close(fig)
+        fig, ax = plt.subplots(1, 2, figsize=(12, 4.6))
+        for tag, g in t.groupby("tag"):
+            g = g.sort_values("cores")
+            yerr = [g.speedup - g.speedup_lo, g.speedup_hi - g.speedup]
+            ax[0].errorbar(g.cores, g.speedup, yerr=yerr, marker="o", capsize=3, label=label_of(tag))
+            ax[1].plot(g.cores, g.efficiency * 100, marker="o", label=label_of(tag))
+        cmax = t.cores.max()
+        xs = np.array([1, cmax])
+        ax[0].plot(xs, xs, "k--", lw=1, label="ideal")
+        ax[0].set(xscale="log", yscale="log", xlabel="cores (ranks x threads)", ylabel=f"speedup vs serial ({ts:.3f} s)",
+                  title=f"Strong scaling, N={N:,}, F={F}")
+        ax[1].axhline(100, color="k", ls="--", lw=1)
+        ax[1].set(xscale="log", xlabel="cores (ranks x threads)", ylabel="parallel efficiency (%)", title="Efficiency", ylim=(0, 115))
+        plain_log_axes(ax[0], t.cores, y=True)
+        plain_log_axes(ax[1], t.cores)
+        for a in ax:
+            a.grid(alpha=0.3, which="both")
+        ax[0].legend(fontsize=8)
+        fig.text(0.01, 0.005, f"baseline: {how}.  Data: {', '.join(sorted(df[df.tag.str.startswith(prefix)].file.unique()))}", fontsize=6, color="gray")
+        fig.tight_layout()
+        fig.savefig(os.path.join(out, f"{prefix}_scaling{suffix}.png"), dpi=200)
+        plt.close(fig)
 
     # time breakdown from the profiled runs
     p = df[(df.profile == 1) & df.tag.str.startswith(prefix + "_") & (df.N == N) & (df.F == F)]
@@ -176,31 +182,41 @@ def strong_block(df, prefix, out, tables):
 
 
 def weak_block(df, out, tables):
-    t = times(df, lambda x: x.startswith("weak_"))
-    if t.empty:
+    t_all = times(df, lambda x: x.startswith("weak_"))
+    if t_all.empty:
         print("[plot] weak: no rows, skipped")
         return
-    fig, ax = plt.subplots(1, 2, figsize=(12, 4.6))
-    rows = []
-    for tag, g in t.groupby("tag"):
-        g = g.sort_values("cores").copy()
-        g["efficiency"] = g["t"].iloc[0] / g["t"]
-        g["rows_per_core"] = g.N / g.cores
-        rows.append(g)
-        ax[0].errorbar(g.cores, g.t, yerr=[g.t - g.tmin, g.tmax - g.t], marker="o", capsize=3, label=label_of(tag.replace("weak", "x")))
-        ax[1].plot(g.cores, g.efficiency * 100, marker="o", label=label_of(tag.replace("weak", "x")))
-    ax[0].set(xscale="log", xlabel="cores", ylabel="training time (s)", title="Weak scaling: rows per core held constant")
-    ax[1].axhline(100, color="k", ls="--", lw=1)
-    ax[1].set(xscale="log", xlabel="cores", ylabel="weak-scaling efficiency (%)  = T(smallest) / T(p)", ylim=(0, 115))
-    plain_log_axes(ax[0], t.cores)
-    plain_log_axes(ax[1], t.cores)
-    for a in ax:
-        a.grid(alpha=0.3, which="both")
-    ax[0].legend(fontsize=8)
-    fig.tight_layout()
-    fig.savefig(os.path.join(out, "weak_scaling.png"), dpi=200)
-    plt.close(fig)
-    tables["weak_scaling"] = pd.concat(rows, ignore_index=True)
+    # One figure/table per F so an F-sweep does not mix feature counts into a
+    # single (meaningless) weak-scaling curve.
+    Fs = sorted(t_all.F.unique())
+    multi = len(Fs) > 1
+    all_rows = []
+    for F in Fs:
+        F = int(F)
+        t = t_all[t_all.F == F]
+        fig, ax = plt.subplots(1, 2, figsize=(12, 4.6))
+        rows = []
+        for tag, g in t.groupby("tag"):
+            g = g.sort_values("cores").copy()
+            g["efficiency"] = g["t"].iloc[0] / g["t"]
+            g["rows_per_core"] = g.N / g.cores
+            rows.append(g)
+            ax[0].errorbar(g.cores, g.t, yerr=[g.t - g.tmin, g.tmax - g.t], marker="o", capsize=3, label=label_of(tag.replace("weak", "x")))
+            ax[1].plot(g.cores, g.efficiency * 100, marker="o", label=label_of(tag.replace("weak", "x")))
+        ax[0].set(xscale="log", xlabel="cores", ylabel="training time (s)", title=f"Weak scaling (F={F}): rows per core held constant")
+        ax[1].axhline(100, color="k", ls="--", lw=1)
+        ax[1].set(xscale="log", xlabel="cores", ylabel="weak-scaling efficiency (%)  = T(smallest) / T(p)", ylim=(0, 115))
+        plain_log_axes(ax[0], t.cores)
+        plain_log_axes(ax[1], t.cores)
+        for a in ax:
+            a.grid(alpha=0.3, which="both")
+        ax[0].legend(fontsize=8)
+        fig.tight_layout()
+        suffix = f"_F{F}" if multi else ""
+        fig.savefig(os.path.join(out, f"weak_scaling{suffix}.png"), dpi=200)
+        plt.close(fig)
+        all_rows.extend(rows)
+    tables["weak_scaling"] = pd.concat(all_rows, ignore_index=True)
 
     p = df[(df.profile == 1) & df.tag.str.startswith("weak_mpi")]
     if len(p):

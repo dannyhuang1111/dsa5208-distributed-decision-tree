@@ -3,27 +3,20 @@
 # for a GPU node, builds src/tree_cuda.cu with nvcc, and runs the histogram
 # benchmark.  Submit with:   qsub scripts/job_gpu.pbs
 #
-# CLUSTER-SPECIFIC values to CHECK/FILL on the cluster (cannot verify from here):
-#   * GPU queue name          -> `qstat -Q` / cluster docs      (the -q line)
-#   * GPU resource syntax     -> cluster docs: ngpus=1 vs gpu=1  (the select line)
-#   * CUDA module name        -> `module avail cuda`            (the module load line)
-# The CPU job (job_scaling.pbs) uses queue 'parallel' and module foss/2022b;
-# the GPU queue and a CUDA module are usually different -- confirm both.
-#
-# KNOWN reference (NUS Atlas, same admin as Vanda): the CPU side used queue
-# 'parallel' + module foss/2022b. The GPU queue/module were not used on Atlas by
-# this project, so the values below are generic guesses -- confirm on Vanda.
+# GPU specs below are from the team's Vanda GPU run (single A40, confirmed on
+# Vanda): queue 'gpu', one GPU + 4 CPU cores, module cuda12.2/toolkit/12.2.2.
+# Adjust if your Vanda allocation differs (`qstat -Q`, `module avail cuda`).
 #PBS -N dt_gpu
 #PBS -q gpu
-#PBS -l select=1:ncpus=4:ngpus=1
+#PBS -l select=1:ncpus=4:mpiprocs=1:ompthreads=4:ngpus=1
 #PBS -l walltime=00:30:00
 #PBS -j oe
 
 cd "$PBS_O_WORKDIR" || exit 1
 
 [ -f /app1/ebenv ] && source /app1/ebenv
-# TODO: load the cluster's CUDA toolkit module (name varies, e.g. CUDA/12.x).
-module load cuda || module load CUDA || { echo "no cuda module -- fix the module load line"; exit 1; }
+# Vanda CUDA toolkit (confirmed); fall back to a generic cuda module elsewhere.
+module load cuda12.2/toolkit/12.2.2 2>/dev/null || module load cuda 2>/dev/null || { echo "no cuda module -- fix the module load line"; exit 1; }
 # A host C++17 compiler for the serial baseline comparison (foss gives GCC 12).
 module load foss/2022b 2>/dev/null || true
 

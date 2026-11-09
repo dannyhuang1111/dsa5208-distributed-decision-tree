@@ -1,0 +1,345 @@
+% ============================================================================
+%  DSA5208 Final Project report.  Build locally:  cd report && tectonic report.tex
+%  Narrative flow (Spark-report style); rubric coverage tagged in comments so it
+%  can be audited at a glance (tags do NOT render in the PDF):
+%    [R1 5pt] explain algorithm         -> Sec 2
+%    [R2 5pt] serial scaling, vary N&F  -> Sec 5
+%    [R3 10pt] MPI strong+weak >=256,    -> Sec 6
+%              speedup/eff, communication
+%    [R4 10pt] MPI+X (OpenMP) + GPU      -> Sec 7
+%    [R5 5pt] overall discussion         -> Sec 8
+%  General instructions also require: validation (Sec 4), machine stated on
+%  figures (Sec 3/6), real-data conclusions (Sec 8), AI usage (Sec 9), authors +
+%  code link (title).  \todo{} marks data not yet collected.
+% ============================================================================
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{parskip}
+\usepackage{float}
+\widowpenalty=10000
+\clubpenalty=10000
+\hypersetup{colorlinks=true, urlcolor=blue, linkcolor=black}
+\graphicspath{{figures/}{../results/report_assets/}}
+\lstset{basicstyle=\ttfamily\small,breaklines=true,frame=single}
+\newcommand{\todo}[1]{\textcolor{red}{[\textbf{TODO:} #1]}}
+
+\title{A Hybrid-Parallel Decision Tree:\\ MPI, OpenMP and CUDA Scaling of Histogram-Based CART}
+\author{[Member 1 Name (A0000000X)] \and [Member 2 Name (A0000000X)] \and [Member 3 Name (A0000000X)]}
+\date{\href{https://github.com/USER/REPO}{\todo{public GitHub repository link}}}
+
+\begin{document}
+\maketitle
+
+% ===========================================================================
+\section{Introduction}
+
+A decision tree is built greedily: starting from all the training rows at the
+root, each node chooses the one feature and threshold that best separates the
+two classes, splits its rows accordingly, and repeats on the two children until
+a stopping rule fires. This project parallelizes the \emph{construction} of a
+binary classification tree and studies how different parallelization choices
+affect its scaling and efficiency.
+
+The problem is a good parallelization target because it is \emph{not}
+embarrassingly parallel. Although the training rows can be partitioned across
+processes trivially, choosing a split needs the class counts on both sides of
+every candidate threshold \emph{summed over all rows}. With the rows spread
+across processes, no process can decide a split alone: each node forces a
+collective communication, and the children a node produces determine the work of
+the next level. That per-node global reduction, and the dependency between
+levels, are the source of the communication and load-balancing challenges we
+examine.
+
+The report follows the project from the algorithm and its serial cost model
+(Sections~\ref{sec:algo}--\ref{sec:design}), through a correctness validation
+(Section~\ref{sec:valid}), to the three scaling studies: serial problem-size
+scaling (Section~\ref{sec:serial}), pure-MPI strong and weak scaling to
+\num{256} cores (Section~\ref{sec:mpi}), and the MPI+X results for the
+MPI+OpenMP hybrid and the CUDA GPU arm (Section~\ref{sec:mpix}). Reproduction
+instructions are in \texttt{README.md}.
+
+% ===========================================================================
+\section{The algorithm and the computing environment}\label{sec:algo}
+% [R1 5pt] explain the algorithm being parallelized
+
+\subsection{Histogram-based CART with the Gini criterion}
+
+For a node holding $t$ samples of which $p$ are positive, the Gini impurity is
+\begin{equation}
+  G(p,t) = 1 - \left(\tfrac{p}{t}\right)^2 - \left(\tfrac{t-p}{t}\right)^2 ,
+\end{equation}
+and a candidate split into a left child $(p_L,t_L)$ and right child
+$(p_R,t_R)$ is scored by the Gini gain
+\begin{equation}
+  \Delta G = G(p,t) - \frac{t_L}{t}\,G(p_L,t_L) - \frac{t_R}{t}\,G(p_R,t_R).
+  \label{eq:gain}
+\end{equation}
+The node adopts the (feature, threshold) with the largest $\Delta G$, and
+recursion stops when the node reaches the maximum depth, holds at most
+\texttt{min-split} samples, is pure, or no split gives positive gain.
+
+Rather than sorting each feature at every node, we use a \textbf{histogram}
+formulation. Each feature's values are placed into bins; when a feature has at
+most \num{256} distinct values the bins are its exact distinct values, so the
+candidate thresholds are identical to a sort-based search. A node is then
+summarised by, per bin, the pair $[\text{count},\text{positive count}]$. Scanning
+those bins in order reproduces every candidate split from
+Equation~\ref{eq:gain}. The histogram is the unit of work that the
+parallelization distributes, and because its entries are integers, summing them
+across processes is exact and order-independent --- a property we rely on for
+both correctness and determinism (Sections~\ref{sec:design}--\ref{sec:valid}).
+
+Per node, the dominant cost is building the histogram, which is
+$O(n_{\text{node}}\times F)$ for $n_{\text{node}}$ rows and $F$ features. Summed
+over the tree, training cost grows with both the number of rows $N$ and the
+number of features $F$; Section~\ref{sec:serial} measures both.
+
+\subsection{One source, four configurations}
+
+The algorithm is written once in \texttt{src/dt.cpp}; MPI and OpenMP are enabled
+by compile-time guards so the split-search logic is byte-identical in every
+build. This yields the four configurations the report compares:
+
+\begin{itemize}
+  \item \textbf{serial} --- no MPI, no OpenMP; the single-core baseline for
+        speedup;
+  \item \textbf{pure MPI} --- the MPI build run with \texttt{OMP\_NUM\_THREADS=1},
+        so MPI is the only parallelism (Section~\ref{sec:mpi});
+  \item \textbf{MPI+OpenMP} --- the same build with multiple threads per rank
+        (Section~\ref{sec:mpix});
+  \item \textbf{CUDA} --- a separate GPU implementation of the histogram hot path
+        (Section~\ref{sec:mpix}).
+\end{itemize}
+
+\subsection{Computing environment}
+% general instruction: runtime figures from Atlas or Vanda -> state the machine
+
+Benchmarks were run on \todo{Atlas / Vanda --- confirm}. The run recorded in
+\texttt{results/raw/env\_*.txt} used a dual-socket \textbf{AMD EPYC 7R13} node
+(\num{48} cores, one thread per core), \textbf{OpenMPI 4.1.4}, and \textbf{GCC
+12.2.0} (module \texttt{foss/2022b}); each benchmark point is the mean of several
+repetitions after a warm-up tree. \todo{replace with the final \num{256}-core
+run's environment once collected.}
+
+\subsection{Dataset}
+
+We use the preprocessed Instacart reorder dataset \texttt{instacart\_clean.csv}:
+\num{200000} orders, \num{7} features (order number, day of week, hour of day,
+days since prior order, add-to-cart order, aisle id, department id) and a binary
+\texttt{reordered} label. The file is clean (no missing values) and every
+feature has at most \num{256} distinct values, so binning is exact.
+\todo{confirm whether this file is the real Kaggle extract or the preprocess.py
+schema-matched sample, and state it plainly.}
+
+Because \num{200000} rows are far too few to occupy hundreds of cores --- the
+per-node reduction would dominate --- the scaling studies instead use a
+deterministic synthetic generator that reproduces the Instacart schema and value
+ranges. Row $r$ is a pure function of $(\text{seed},r)$, so the dataset is
+identical for every process count and nothing is read from disk, letting us vary
+$N$ and $F$ freely. The synthetic data is Instacart-\emph{like} in shape, not
+sampled from the real file; real-data conclusions (Section~\ref{sec:discuss})
+come from the real file itself.
+
+% ===========================================================================
+\section{Parallelization design}\label{sec:design}
+% [R5 5pt] (how we chose to parallelize; which parts communicate most)
+% general instruction: design decisions
+
+\paragraph{Data parallelism over rows, not over tree nodes.}
+The rows are block-distributed across processes once, at load time, and never
+move again. For each node, every process builds the histogram of \emph{its own}
+rows and a single \texttt{MPI\_Allreduce} with integer sum produces the global
+histogram; every process then scans that identical histogram and independently
+reaches the identical split, so no split decision needs to be broadcast.
+
+We deliberately did not parallelize by handing whole subtrees to different
+processes (task parallelism). Near the root there are only a handful of nodes but
+the most data, so subtree parallelism is scarcest exactly where the cost is
+greatest; sibling subtrees are unbalanced, so processes would idle; and
+assigning a subtree to a process would require reshuffling rows at every split.
+Data parallelism instead keeps every process busy on every node and attacks the
+cost where it lives --- the histogram build, which Section~\ref{sec:mpi} shows
+dominates the runtime.
+
+\paragraph{Determinism as a design constraint.}
+Because the reduction sums integers, its result does not depend on the number of
+processes or the order of summation, so the tree is bit-for-bit identical across
+all configurations. This both gives a strong correctness check
+(Section~\ref{sec:valid}) and ruled out alternatives that would have broken it,
+such as reducing floating-point partial gains or assigning subtrees to processes.
+
+\paragraph{Two communication patterns (tree growth).}
+The same tree can be grown two ways, trading off message count against message
+size. \emph{Node-wise} growth is depth-first with one reduction per internal
+node (many small messages, latency-bound); \emph{level-wise} growth is
+breadth-first and reduces the stacked histograms of all nodes at one depth in a
+single collective (far fewer, larger messages). At depth \num{6} this is roughly
+\num{64} reductions versus \num{7}. \todo{report the measured counts and the
+runtime difference from \texttt{results/raw/design\_*.csv}, and confirm
+level-wise is faster.}
+
+\paragraph{Two OpenMP strategies (X = OpenMP).}
+Within a rank, threads can either split the \emph{rows} (each thread fills a
+private histogram, then a parallel reduction combines them) or split the
+\emph{features} (threads share one histogram, with parallelism capped by $F$).
+\todo{report which wins from \texttt{design\_*.csv}; the row split is expected to
+scale better as it is not limited by the feature count.}
+
+% ===========================================================================
+\section{Validating correctness}\label{sec:valid}
+% general instruction: validation that the parallel algorithm works correctly
+
+Two independent checks establish that the parallel builds compute the right tree.
+
+First, \textbf{cross-configuration equivalence} exploits the determinism above.
+The script \texttt{scripts/check\_equivalence.sh} hashes the entire tree
+(structure, split features, thresholds and leaf predictions) with FNV-1a and
+requires every configuration --- process counts $\{1,2,3,4,7\}$, thread counts
+$\{1,2,3\}$, both growth modes, both OpenMP strategies, both the synthetic and
+CSV input paths, on a prime number of rows so the row blocks are uneven --- to
+reproduce the serial reference hash exactly. \todo{paste the final ``N / N
+configurations identical to the reference'' line from a run.}
+
+Second, an \textbf{external reference}: \texttt{scripts/compare\_sklearn.py}
+rebuilds the tree dumped by \texttt{dt --dump-tree} and compares it node by node
+against scikit-learn's \texttt{DecisionTreeClassifier} on the same data (the only
+permitted differences are exact ties between equally good splits, which the two
+implementations break differently). \todo{run on the Instacart CSV and report
+the agreement.}
+
+This equivalence was also what motivated the current design. An earlier MPI
+implementation combined rank-local split gains with \texttt{MPI\_MAXLOC}, which
+is not the global Gini gain; its trees drifted with the process count (training
+accuracy \SI{68.46}{\percent} at one rank versus \SI{68.42}{\percent} at eight on
+the same \num{200000} rows), while the root split stayed correct and so hid the
+bug from shallow checks. The histogram-reduction design removes this drift.
+\todo{confirm/restate these dev-time numbers or drop if not reproducible.}
+
+% ===========================================================================
+\section{Serial scaling with problem size}\label{sec:serial}
+% [R2 5pt] serial runtime scaling, varying BOTH dimensions: N (rows) and F (features)
+
+The serial build establishes both the speedup baseline and the cost model. We
+vary the two dimensions of problem size independently: the number of rows $N$ at
+fixed $F$, and the number of features $F$ at fixed $N$. Because per-node work is
+$O(n_{\text{node}}\times F)$, both should give near-linear runtime growth.
+
+\todo{run the serial sweep (ranks=threads=1): $N\in\{1,2,4,8,16,32\}$M at fixed
+$F$, and $F\in\{7,14,28,56,112,224\}$ at fixed $N$. Source:
+\texttt{results/raw/serial\_scan\_*.csv}.}
+
+\todo{figure: serial runtime vs $N$ at fixed $F$ (expect linear).}
+\todo{figure: serial runtime vs $F$ at fixed $N$ (expect linear).}
+\todo{one paragraph: confirm the $O(N\times F)$ model from the two slopes.}
+
+% ===========================================================================
+\section{Pure-MPI strong and weak scaling}\label{sec:mpi}
+% [R3 10pt] strong + weak to >=256 cores; speedup + efficiency; communication impact
+
+This section uses the pure-MPI configuration (one rank per core,
+\texttt{OMP\_NUM\_THREADS=1}). Speedup is $S_p = T_1/T_p$ against the serial
+baseline on the same data, and parallel efficiency is $E_p = S_p/p$ for $p$
+cores; $T_p$ is the maximum over ranks of the barrier-to-barrier training time.
+
+\subsection{Strong scaling}
+
+Here the problem is fixed and the core count grows, up to \num{256} cores.
+
+\todo{table + figure: $T_p$, $S_p$ and $E_p$ vs core count to \num{256}. Source:
+\texttt{results/raw/strong\_*.csv} and \texttt{strong\_scaling.*}. Discuss where
+efficiency starts to fall and why.}
+
+\subsection{Weak scaling}
+
+Here the work per core is fixed (constant rows per rank) and both $N$ and the
+core count grow together, so ideal efficiency is flat at \num{1}.
+
+\todo{table + figure: $E_p$ vs core count at constant rows/core to \num{256}.
+Source: \texttt{results/raw/weak\_*.csv} and \texttt{weak\_scaling.*}.}
+
+\subsection{The impact of communication}
+
+With \texttt{--profile}, a barrier before each reduction separates time spent
+\emph{waiting} for the slowest rank (load imbalance) from time spent in the
+reduction itself (transfer). Decomposing the runtime into histogram build, split
+scan, partition, wait and reduction shows how the parallel part is spent and why
+efficiency falls at high core counts.
+
+\todo{figure: stacked runtime breakdown ($t_{\text{hist}}$, $t_{\text{scan}}$,
+$t_{\text{part}}$, $t_{\text{wait}}$, $t_{\text{allreduce}}$) vs cores from the
+profiled runs (\texttt{*\_breakdown.*}). Discuss: histogram build dominates and
+shrinks with $p$, while wait and reduction grow, eventually capping speedup.}
+
+% ===========================================================================
+\section{MPI+X: OpenMP hybrid and the GPU}\label{sec:mpix}
+% [R4 10pt] MPI+X analysis; X=OpenMP => must also test on >=1 GPU
+
+\subsection{MPI + OpenMP}
+
+Adding OpenMP threads within each rank reduces the number of ranks sharing the
+reduction while keeping the cores busy. At a fixed total core count we vary the
+ranks$\times$threads split to find the best balance between MPI reduction cost
+and on-node thread scaling.
+
+\todo{table + figure: runtime at fixed cores for splits such as 48$\times$1,
+24$\times$2, 12$\times$4, 6$\times$8 from \texttt{results/raw/hybrid\_*.csv} and
+\texttt{hybrid\_fixed.*}; state the best ratio and explain why fewer ranks reduce
+communication but too many threads lose on-node efficiency.}
+
+\subsection{CUDA on a GPU}
+% required because X = OpenMP
+
+Because the chosen X is OpenMP, we additionally implement the histogram hot path
+on a GPU in CUDA and benchmark it on at least one GPU. The kernel builds the same
+$[\text{count},\text{positive count}]$ histogram the CPU builds, with threads
+accumulating over rows into per-bin counters, so the split chosen matches the CPU
+result.
+
+\todo{CUDA implementation is being rewritten (the previous kernel tested
+hard-coded thresholds rather than the data's bins and evaluated only the root).
+Once complete: report the GPU model, the data size, the histogram/split runtime
+on the GPU versus one CPU core and versus a full OpenMP node, and the
+host$\leftrightarrow$device transfer cost. Source: GPU benchmark run.}
+
+% ===========================================================================
+\section{Discussion and conclusions}\label{sec:discuss}
+% [R5 5pt] overall discussion + real-data conclusions
+
+\paragraph{How the problem was parallelized.}
+\todo{summarise, tying the sections together: data-parallel over rows with a
+per-node integer-histogram \texttt{Allreduce}; the reduction is the only
+communication and therefore the main scaling limit; level-wise growth minimises
+the number of collectives; OpenMP adds on-node parallelism over rows and sibling
+nodes; CUDA accelerates the same histogram on a GPU. State where efficiency is
+lost (reduction latency and load imbalance at high core counts) using the
+Section~\ref{sec:mpi} breakdown.}
+
+\paragraph{Conclusions about the data.}
+On the real Instacart file the serial tree reaches \todo{confirm} about
+\SI{68.5}{\percent} training accuracy at depth \num{6}, against a majority-class
+baseline of \SI{66.2}{\percent} (\SI{33.8}{\percent} of orders are reorders), a
+modest but real improvement. \todo{name the top split features from
+\texttt{--dump-tree} and interpret them (e.g. add-to-cart order and days since
+prior order), and note that \num{200000} rows is far too small to need \num{256}
+cores --- which is why scaling uses synthetic data.}
+
+% ===========================================================================
+\section{AI usage}\label{sec:ai}
+% general instruction: explanation of any AI usage
+
+\todo{Write an honest declaration. A truthful template to edit: ``Anthropic's
+Claude, via the Claude Code CLI, assisted with code review, with diagnosing the
+MPI split-search correctness issue, and with drafting and structuring this
+report. All design decisions, the choice of algorithm and parallelization
+strategy, and the final analysis were the authors'. All AI-assisted code was
+reviewed, compiled and run by the authors, and every reported number comes from
+an actual run on \todo{Atlas/Vanda}.''}
+
+\end{document}

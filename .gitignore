@@ -1,12 +1,16 @@
 # Compiled binaries & object files
 build/
 bin/
-tree_serial
-tree_mpi_omp
 tree_cuda
 *.o
 *.out
 *.exe
+
+# Generated report PDF (archived reference PDF is kept)
+/report/report.pdf
+report/*.aux
+report/*.log
+report/*.out
 
 # macOS
 .DS_Store

@@ -1,100 +1,121 @@
-# Distributed Decision Tree on Instacart E-Commerce Dataset (MPI + OpenMP + CUDA)
+# Histogram-based distributed decision tree (MPI + OpenMP, CUDA)
 
-This project implements a **3-Level Hybrid Parallel Decision Tree** in C++ using **MPI, OpenMP, and CUDA**, specifically tailored for massive tabular e-commerce customer behavior analysis (Instacart Market Basket Reorder Prediction, ~1.38M records).
+DSA5208 final project. A binary CART decision tree (Gini) implemented once in
+`src/dt.cpp` and compiled three ways from the same source:
 
-Tested and evaluated on the **Atlas / Vanda HPC Cluster** scaling up to **256 CPU cores** and **NVIDIA GPUs**.
+| build | parallelism | purpose |
+|---|---|---|
+| `dt_serial` | none (1 core) | baseline for speedup / efficiency |
+| `dt_hybrid` (pure MPI) | MPI only (`OMP_NUM_THREADS=1`) | distributed, data-parallel |
+| `dt_hybrid` (MPI+OpenMP) | MPI + OpenMP | hybrid |
 
----
+A CUDA version (`src/tree_cuda.cu`) is the GPU arm of the MPI+X study; it is
+being rewritten and is **not** yet integrated (see *Status* below).
 
-## 1. Project Architecture
+## Build
 
-The parallelization is structured into three coordinated levels:
-1. **Level 1 (Inter-Node / MPI Data-Parallelism)**: Data sharding across up to 64 MPI nodes with distributed split finding via `MPI_Allreduce` / `MPI_Bcast`.
-2. **Level 2 (Intra-Node / OpenMP Feature-Parallelism)**: Multi-threaded dynamic scheduling across features and candidate split thresholds (`#pragma omp parallel for`).
-3. **Level 3 (Hardware Acceleration / CUDA)**: Fine-grained GPU kernel parallelizing sample evaluation and Gini calculation for each candidate threshold.
+```bash
+make -f Makefile.dt            # -> build/dt_serial  build/dt_hybrid
+```
 
----
+* Linux / Atlas: needs `g++` (C++17) and an MPI wrapper (`module load foss/2022b`
+  gives GCC 12 + OpenMPI 4.1 on Atlas).
+* macOS: Apple clang has no bundled OpenMP, so the Makefile uses Homebrew's
+  libomp (`brew install libomp`). If you see `OMP: Error #15 ... already
+  initialized`, run with `KMP_DUPLICATE_LIB_OK=TRUE`.
 
-## 2. Directory Structure
+## Run
+
+```bash
+# serial baseline: 5M synthetic rows, 28 features
+build/dt_serial --synthetic 5000000 --features 28
+
+# 8 ranks x 4 threads, level-wise growth, profiled (barrier before each Allreduce)
+OMP_NUM_THREADS=4 mpirun -np 8 build/dt_hybrid --synthetic 5000000 --features 28 --profile 1
+
+# real data: CSV with the label in column 1 and a header row (preprocess.py output)
+OMP_NUM_THREADS=2 mpirun -np 4 build/dt_hybrid --csv instacart_clean.csv
+```
+
+Options: `--growth node|level`, `--omp sample|feature`, `--depth 6`,
+`--min-split 20`, `--reps 3`, `--warmup 1`, `--profile 0|1`, `--check 0|1`,
+`--dump-tree FILE`, `--export-csv FILE`, `--tag NAME`.
+`build/dt_serial --header` prints the column names of the `RESULT,...` lines.
+
+Synthetic data is a deterministic function of (seed, row number), so the dataset
+is identical for every rank count and nothing is read from disk.
+
+## How it works
+
+For every node: each rank counts (rows, positives) per feature bin over its own
+rows; one `MPI_Allreduce(SUM)` of that integer histogram yields the global
+histogram; every rank scans the same global histogram and picks the same split.
+Integer sums are order-independent, so the tree is **bit-for-bit identical** for
+any number of ranks and threads (verified below).
+
+Two orthogonal parallelization axes are studied:
+
+* `--growth node` — depth first, one Allreduce per internal node (latency bound).
+* `--growth level` — breadth first, one Allreduce per level (fewer, larger messages).
+* `--omp sample` — threads split rows, private histograms, then parallel reduce.
+* `--omp feature` — threads split features, shared histogram (limited by F).
+
+Features are binned by distinct value: exact (same candidate thresholds as a
+sort) when a feature has <= 256 distinct values, which holds for Instacart;
+otherwise quantile bins are used and `APPROXIMATE bins` is printed.
+
+## Validation
+
+```bash
+scripts/check_equivalence.sh          # many configs vs the serial reference tree
+build/dt_serial --csv data.csv --dump-tree tree.txt --reps 1 --warmup 0
+python3 scripts/compare_sklearn.py data.csv tree.txt     # whole-tree vs scikit-learn
+```
+
+`check_equivalence.sh` runs rank counts {1,2,3,4,7}, thread counts {1,2,3}, both
+growth modes, both OpenMP strategies, on a prime number of rows (uneven blocks)
+and through the CSV path, requiring the FNV-1a hash of the entire tree to equal
+the serial reference.
+
+## Experiments
+
+```bash
+scripts/run_matrix.sh smoke                     # ~1 min sanity check, do this first
+scripts/run_matrix.sh strong weak hybrid design
+python3 analysis/plot_results.py --raw results/raw --out results/report_assets
+```
+
+On the cluster: `qsub scripts/job_scaling.pbs` (read its comments first — queue,
+cores/node, module names and rank binding must be confirmed on the machine).
+Every number in the report comes from `results/raw/*.csv`; `plot_results.py`
+reads nothing else and refuses to plot if two configurations built different trees.
+Machine / MPI / compiler details for each run are recorded in
+`results/raw/env_*.txt`.
+
+## Repository layout
 
 ```text
-├── Makefile                # Build system (Serial, MPI+OpenMP, CUDA)
-├── preprocess.py           # Preprocessing script (or synthetic data generator)
-├── verify.py               # Correctness validation against Scikit-learn
-├── run_scaling_256.slurm   # SLURM script for 1 to 256 CPU cores scaling
-├── run_gpu.slurm           # SLURM script for single GPU evaluation
-├── src/
-│   ├── common.h            # Data structures, fast Gini, and CSV parser
-│   ├── tree_serial.cpp     # Serial baseline decision tree
-│   ├── tree_mpi_omp.cpp    # MPI + OpenMP hybrid distributed decision tree
-│   └── tree_cuda.cu        # CUDA kernel for single GPU execution
-└── README.md               # User guide
+src/dt.cpp              # the algorithm (serial / MPI / MPI+OpenMP, one source)
+src/tree_cuda.cu        # GPU arm (being rewritten; not yet integrated)
+src/common.h            # shared helpers used by the CUDA build
+Makefile.dt             # build system for dt.cpp
+scripts/                # run_matrix.sh, check_equivalence.sh, compare_sklearn.py, job_scaling.pbs
+analysis/plot_results.py
+results/                # raw CSVs, logs, generated report assets
+report/                 # report source (report/archive = superseded artifacts)
+preprocess.py           # Instacart -> instacart_clean.csv (or synthetic fallback)
 ```
 
----
+## Status
 
-## 3. Quick Start (Local Development)
+* Serial, pure-MPI, and MPI+OpenMP: complete and validated.
+* Benchmarks in `results/` are from a 48-core Atlas run on synthetic data;
+  256-core runs and the GPU (CUDA) arm are in progress.
+* Real-data run on `instacart_clean.csv`: serial trains to ~68.5% accuracy
+  (majority-class baseline is 66.2%).
 
-### Step 1: Generate or Prepare Dataset
-If raw Kaggle files (`orders.csv`, `order_products__train.csv`, `products.csv`) are present:
-```bash
-python3 preprocess.py
-```
-If raw files are not downloaded yet, running `python3 preprocess.py` will automatically generate 200,000 synthetic rows matching the exact Instacart schema for immediate local compilation and debugging.
+## Group members
 
-### Step 2: Build All Targets
-```bash
-make all
-```
-
-### Step 3: Run Baseline and Parallel Implementations
-* **Serial Version**:
-  ```bash
-  ./tree_serial instacart_clean.csv 6
-  ```
-* **MPI + OpenMP Version (e.g. 4 MPI ranks x 2 OpenMP threads = 8 cores)**:
-  ```bash
-  export OMP_NUM_THREADS=2
-  mpirun -np 4 ./tree_mpi_omp instacart_clean.csv 6
-  ```
-* **CUDA Version (if NVIDIA GPU available)**:
-  ```bash
-  ./tree_cuda instacart_clean.csv
-  ```
-
-### Step 4: Validate Correctness
-Verify the tree's accuracy and root split against Python's `scikit-learn`:
-```bash
-python3 verify.py instacart_clean.csv
-```
-
----
-
-## 4. Running on Atlas / Vanda Cluster
-
-### 256-Core Strong & Weak Scaling
-Submit the 256-core batch script:
-```bash
-sbatch run_scaling_256.slurm
-```
-This will automatically evaluate cores from 1, 2, 4, 8, 16, 32, 64, 128 to **256 cores**, measuring:
-* Total Runtime ($T_{total}$)
-* Pure Computation Time ($T_{comp}$)
-* MPI Communication Overhead ($T_{comm}$)
-* Speedup ($S = T_{serial} / T_{parallel}$)
-* Parallel Efficiency ($E = S / p$)
-
-Output will be recorded in `scaling_results.csv`.
-
-### GPU Test
-Submit the GPU job:
-```bash
-sbatch run_gpu.slurm
-```
-
----
-
-## 5. Group Members
-* [Member 1 Name - Student ID]
-* [Member 2 Name - Student ID]
-* [Member 3 Name - Student ID]
+* [Member 1 Name — Student ID]
+* [Member 2 Name — Student ID]
+* [Member 3 Name — Student ID]

@@ -24,8 +24,8 @@
 #   module load foss/2022b                      # GCC 12.2.0 + OpenMPI 4.1.4 (verified on atlas8)
 #PBS -N dt_scaling
 #PBS -P personal-huangjenchien
-#PBS -l select=4:ncpus=64:mpiprocs=64:mem=64gb
-#PBS -l walltime=04:00:00
+#PBS -l select=4:ncpus=72:mpiprocs=72:mem=240gb
+#PBS -l walltime=02:00:00
 #PBS -j oe
 
 cd "$PBS_O_WORKDIR" || exit 1

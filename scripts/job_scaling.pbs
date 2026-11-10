@@ -23,7 +23,7 @@
 #   #PBS -l select=1:ncpus=96:mpiprocs=96      # Atlas 'parallel' caps at 96 cores/user
 #   module load foss/2022b                      # GCC 12.2.0 + OpenMPI 4.1.4 (verified on atlas8)
 #PBS -N dt_scaling
-#PBS -q normal
+#PBS -q cpu_parallel
 #PBS -l select=4:ncpus=64:mpiprocs=64:mem=64gb
 #PBS -l walltime=04:00:00
 #PBS -j oe

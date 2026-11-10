@@ -7,7 +7,7 @@
 # Vanda): queue 'gpu', one GPU + 4 CPU cores, module cuda12.2/toolkit/12.2.2.
 # Adjust if your Vanda allocation differs (`qstat -Q`, `module avail cuda`).
 #PBS -N dt_gpu
-#PBS -q gpu
+#PBS -q auto_free
 #PBS -l select=1:ncpus=4:mpiprocs=1:ompthreads=4:ngpus=1
 #PBS -l walltime=00:30:00
 #PBS -j oe

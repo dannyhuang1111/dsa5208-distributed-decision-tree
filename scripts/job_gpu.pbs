@@ -8,7 +8,7 @@
 # Adjust if your Vanda allocation differs (`qstat -Q`, `module avail cuda`).
 #PBS -N dt_gpu
 #PBS -q auto_free
-#PBS -l select=1:ncpus=4:mpiprocs=1:ompthreads=4:ngpus=1
+#PBS -l select=1:ncpus=4:mpiprocs=1:ompthreads=4:ngpus=1:mem=32gb
 #PBS -l walltime=00:30:00
 #PBS -j oe
 
@@ -24,7 +24,7 @@ module load foss/2022b 2>/dev/null || true
 make -f Makefile.dt cuda || { echo "nvcc build failed"; exit 1; }
 make -f Makefile.dt build/dt_serial || true
 
-N=${N:-32000000}
+N=${N:-2000000}
 F=${F:-28}
 REPS=${REPS:-3}
 

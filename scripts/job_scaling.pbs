@@ -23,15 +23,18 @@
 #   #PBS -l select=1:ncpus=96:mpiprocs=96      # Atlas 'parallel' caps at 96 cores/user
 #   module load foss/2022b                      # GCC 12.2.0 + OpenMPI 4.1.4 (verified on atlas8)
 #PBS -N dt_scaling
-#PBS -P personal-huangjenchien
-#PBS -l select=4:ncpus=72:mpiprocs=72:mem=240gb
-#PBS -l walltime=02:00:00
+#PBS -q auto
+#PBS -P personal-haoranzhang
+#PBS -l select=4:ncpus=64:mpiprocs=64:mem=64gb
+#PBS -l walltime=04:00:00
 #PBS -j oe
 
 cd "$PBS_O_WORKDIR" || exit 1
 
 [ -f /app1/ebenv ] && source /app1/ebenv
-module load foss/2022b 2>/dev/null || module load OpenMPI/4.1.4-GCC-12.2.0 2>/dev/null || module load openmpi 2>/dev/null || true
+# TODO: load Vanda's toolchain (GCC >=9 for C++17 + an MPI). foss/* bundles both.
+# Atlas used foss/2022b (GCC 12.2.0 + OpenMPI 4.1.4); try it on Vanda first.
+module load foss/2022b || { echo "fix the module load line for Vanda"; exit 1; }
 
 make -f Makefile.dt clean all || exit 1
 
@@ -49,7 +52,7 @@ export HYBRID_CORES=${HYBRID_CORES:-256}
 export HYB_THREADS=${HYB_THREADS:-4}
 export REPS=${REPS:-3}
 export LAUNCHES=${LAUNCHES:-1}
-export REAL_CSV=${REAL_CSV:-}
+export REAL_CSV=${REAL_CSV:-$PBS_O_WORKDIR/instacart_clean.csv}
 
-bash scripts/run_matrix.sh ${EXPERIMENTS:-serial_scan strong weak hybrid design}
+bash scripts/run_matrix.sh ${EXPERIMENTS:-serial_scan strong weak hybrid design real}
 

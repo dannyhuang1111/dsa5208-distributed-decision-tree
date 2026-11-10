@@ -7,8 +7,9 @@
 # Vanda): queue 'gpu', one GPU + 4 CPU cores, module cuda12.2/toolkit/12.2.2.
 # Adjust if your Vanda allocation differs (`qstat -Q`, `module avail cuda`).
 #PBS -N dt_gpu
-#PBS -q auto_free
-#PBS -l select=1:ncpus=4:mpiprocs=1:ompthreads=4:ngpus=1:mem=32gb
+#PBS -q auto
+#PBS -P personal-haoranzhang
+#PBS -l select=1:ncpus=4:mpiprocs=1:ompthreads=4:ngpus=1
 #PBS -l walltime=00:30:00
 #PBS -j oe
 
@@ -24,7 +25,7 @@ module load foss/2022b 2>/dev/null || true
 make -f Makefile.dt cuda || { echo "nvcc build failed"; exit 1; }
 make -f Makefile.dt build/dt_serial || true
 
-N=${N:-2000000}
+N=${N:-32000000}
 F=${F:-28}
 REPS=${REPS:-3}
 
@@ -41,10 +42,15 @@ nvidia-smi 2>&1 | head -15 | tee -a "$LOG" || true
 # GPU run.  RESULT_GPU line -> gpu CSV; full output -> log.
 ./build/dt_cuda --synthetic "$N" --features "$F" --reps "$REPS" 2>>"$LOG" | tee -a "$LOG" | grep '^RESULT_GPU,' > "$GPU_CSV"
 
-# Serial baseline on the SAME problem, for the GPU-vs-one-core comparison.
+# Serial baselines on the SAME problem.  The GPU program builds ONE histogram
+# (the root node), so the fair CPU comparison is a depth-1 tree (one histogram
+# pass + one split); the full depth-6 tree needs ~6 passes and is kept for context.
 if [ -x build/dt_serial ]; then
-  echo "--- serial baseline (same N,F) ---" | tee -a "$LOG"
-  ./build/dt_serial --synthetic "$N" --features "$F" --reps "$REPS" --quiet 2>>"$LOG" | tee -a "$LOG" | grep '^RESULT,' >> "$GPU_CSV"
+  echo "--- serial baseline, depth 1 = one histogram pass (same N,F) ---" | tee -a "$LOG"
+  ./build/dt_serial --synthetic "$N" --features "$F" --reps "$REPS" --depth 1 --tag serial_depth1 --dump-tree "$LOGS/serial_root_${RUN_ID}.txt" --quiet 2>>"$LOG" | tee -a "$LOG" | grep '^RESULT,' >> "$GPU_CSV"
+  echo "root split of the serial tree (N <feature> <nbins/id> <threshold> ...): $(head -1 "$LOGS/serial_root_${RUN_ID}.txt")  <- must equal the GPU root split above" | tee -a "$LOG"
+  echo "--- serial baseline, full tree depth 6 (same N,F) ---" | tee -a "$LOG"
+  ./build/dt_serial --synthetic "$N" --features "$F" --reps "$REPS" --tag serial_depth6 --quiet 2>>"$LOG" | tee -a "$LOG" | grep '^RESULT,' >> "$GPU_CSV"
 fi
 
 echo "GPU results -> $GPU_CSV"

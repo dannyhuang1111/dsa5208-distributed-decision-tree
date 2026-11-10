@@ -1,0 +1,12 @@
+run_id=20261110_224241_1537141
+date=2026-11-10T14:42:41Z
+host=CN-064
+max_cores=256
+mpirun=mpirun (Open MPI) 4.1.4  
+mpi_bind=AUTO (AUTO: thr=1 -> --map-by core --bind-to core; thr>1 -> --map-by ppr:CORES_PER_NODE/thr:node --bind-to none, OMP_PROC_BIND=false) cores_per_node=64
+cxx=c++ (GCC) 12.2.0
+lscpu=Model name:                           Intel(R) Xeon(R) Platinum 8452Y;Thread(s) per core:                   1;Core(s) per socket:                   36;Socket(s):                            2;
+pbs_jobid=1537141.stdct-mgmt-02
+pbs_nodefile_lines=256
+params: REPS=3 PROF_REPS=3 LAUNCHES=1 DEPTH=6 F=28 N_STRONG=32000000 N_PER_RANK=1000000
+params: RANK_LIST=1 2 4 8 16 32 64 128 256 THREAD_LIST=1 2 4 8 16 32 64 128 256 HYB_THREADS=4 HYBRID_CORES=256 REAL_CSV=/nfs/home/svu/haoranzhang/Project3/dsa5208-distributed-decision-tree/instacart_clean.csv

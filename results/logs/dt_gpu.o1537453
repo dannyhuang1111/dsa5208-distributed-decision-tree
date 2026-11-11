@@ -1,0 +1,24 @@
+nvcc -O3 -std=c++17 src/tree_cuda.cu -o build/dt_cuda
+make: 'build/dt_serial' is up to date.
+run_id=20261110_235027_1537453 N=32000000 F=28 reps=3
+Tue Nov 10 23:50:27 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 575.57.08              Driver Version: 575.57.08      CUDA Version: 12.9     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA A40                     Off |   00000000:AE:00.0 Off |                    0 |
+|  0%   39C    P8             23W /  300W |       0MiB /  46068MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+--- serial baseline, depth 1 = one histogram pass (same N,F) ---
+root split of the serial tree (N <feature> <nbins/id> <threshold> ...): N 4 2 3.5 32000000 10796893  <- must equal the GPU root split above
+--- serial baseline, full tree depth 6 (same N,F) ---
+GPU results -> results/raw/gpu_20261110_235027_1537453.csv
+Compare: dt_cuda t_kernel/t_total vs the serial RESULT t_total, and vs a
+full MPI+OpenMP node from the strong-scaling run (results/raw/strong_*.csv).

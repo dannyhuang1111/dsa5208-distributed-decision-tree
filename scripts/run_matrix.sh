@@ -61,11 +61,25 @@ if [ -z "${MAX_CORES:-}" ]; then
   else MAX_CORES=$( (nproc 2>/dev/null || sysctl -n hw.ncpu) ); fi
 fi
 
-# Open MPI needs explicit binding so that each rank owns its OMP_NUM_THREADS cores.
-# %T is replaced by the thread count.  CHECK THE PLACEMENT ON THE CLUSTER FIRST
-# (add --report-bindings to MPI_BIND for one smoke run).
+# Cores per node (largest PBS chunk); a rank's threads cannot span nodes.
+if [ -z "${CORES_PER_NODE:-}" ]; then
+  if [ -n "${PBS_NODEFILE:-}" ] && [ -f "${PBS_NODEFILE}" ]; then CORES_PER_NODE=$(sort "$PBS_NODEFILE" | uniq -c | awk 'BEGIN{m=0} $1>m{m=$1} END{print m}')
+  else CORES_PER_NODE=$MAX_CORES; fi
+fi
+
+# Rank binding (Open MPI).  On Vanda compute nodes, "--map-by slot:PE=N" (and
+# --cpus-per-proc / ppr:..:PE=N) HANG under the PBS cpuset, so we avoid PE=:
+#   threads == 1 : --map-by core --bind-to core      (one core per rank, pinned)
+#   threads  > 1 : --map-by ppr:<CORES_PER_NODE/threads>:node --bind-to none,
+#                  OMP_PROC_BIND=false.  ppr fills one node before using the next
+#                  (plain --bind-to none puts ALL ranks on the first node: with
+#                  64 ranks x 4 threads that is 256 threads on 64 cores).  Threads
+#                  are placed by the kernel inside the PBS cpuset; pinning every
+#                  rank's threads to the same cores (OMP_PROC_BIND=close) was ~20x slower.
+# Set MPI_BIND yourself to override (%T = thread count), e.g. on a machine where
+# PE= works:  MPI_BIND='--map-by slot:PE=%T --bind-to core'
 if [ -z "${MPI_BIND+x}" ]; then
-  if $MPIRUN --version 2>&1 | grep -qi "open mpi"; then MPI_BIND='--map-by slot:PE=%T --bind-to core'; else MPI_BIND=''; fi
+  if $MPIRUN --version 2>&1 | grep -qi "open mpi"; then MPI_BIND=AUTO; else MPI_BIND=''; fi
 fi
 TIMEOUT=""; command -v timeout >/dev/null 2>&1 && TIMEOUT="timeout $TMO"
 export KMP_DUPLICATE_LIB_OK=TRUE       # macOS only (conda + Homebrew both ship a libomp); harmless elsewhere
@@ -74,7 +88,7 @@ ENVFILE=$RAW/env_$RUN_ID.txt
 {
   echo "run_id=$RUN_ID"; echo "date=$(date -u +%FT%TZ)"; echo "host=$(hostname)"
   echo "max_cores=$MAX_CORES"; echo "mpirun=$($MPIRUN --version 2>&1 | head -2 | tr '\n' ' ')"
-  echo "mpi_bind=$MPI_BIND"; echo "cxx=$(${CXX:-c++} --version 2>&1 | head -1)"
+  echo "mpi_bind=$MPI_BIND (AUTO: thr=1 -> --map-by core --bind-to core; thr>1 -> --map-by ppr:CORES_PER_NODE/thr:node --bind-to none, OMP_PROC_BIND=false) cores_per_node=$CORES_PER_NODE"; echo "cxx=$(${CXX:-c++} --version 2>&1 | head -1)"
   echo "lscpu=$(lscpu 2>/dev/null | grep -E 'Model name|Socket|Core|Thread' | tr '\n' ';')"
   echo "pbs_jobid=${PBS_JOBID:-}"; echo "pbs_nodefile_lines=${MAX_CORES}"
   echo "params: REPS=$REPS PROF_REPS=$PROF_REPS LAUNCHES=$LAUNCHES DEPTH=$DEPTH F=$F N_STRONG=$N_STRONG N_PER_RANK=$N_PER_RANK"
@@ -94,12 +108,17 @@ launch() {
   local tag=$1 ranks=$2 thr=$3 prof=$4 growth=$5 omp=$6; shift 6
   local cores=$((ranks * thr))
   if [ "$cores" -gt "$MAX_CORES" ]; then echo "  [skip] $tag ranks=$ranks threads=$thr needs $cores > $MAX_CORES cores"; return; fi
+  if [ "$thr" -gt "$CORES_PER_NODE" ]; then echo "  [skip] $tag ranks=$ranks threads=$thr threads per rank > $CORES_PER_NODE cores per node"; return; fi
   local reps=$REPS; [ "$prof" = "1" ] && reps=$PROF_REPS
-  local flags=${MPI_BIND//%T/$thr}
+  local flags omp_bind=close
+  if [ "$MPI_BIND" = "AUTO" ]; then
+    if [ "$thr" -eq 1 ]; then flags='--map-by core --bind-to core'
+    else flags="--map-by ppr:$((CORES_PER_NODE / thr)):node --bind-to none"; omp_bind=false; fi
+  else flags=${MPI_BIND//%T/$thr}; fi
   local l
   for ((l = 1; l <= LAUNCHES; l++)); do
     local log="$LOGS/${tag}_r${ranks}_t${thr}_p${prof}_${growth}_${omp}_L${l}_$RUN_ID.log"
-    OMP_NUM_THREADS=$thr OMP_PROC_BIND=close OMP_PLACES=cores \
+    OMP_NUM_THREADS=$thr OMP_PROC_BIND=$omp_bind OMP_PLACES=cores \
       $TIMEOUT $MPIRUN -np "$ranks" $flags "$HYB" --tag "$tag" --growth "$growth" --omp "$omp" \
         --profile "$prof" --reps "$reps" --depth "$DEPTH" "$@" > "$log" 2>&1
     local rc=$?

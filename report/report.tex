@@ -333,6 +333,7 @@ Because the chosen X is OpenMP, we additionally implement the histogram hot path
 \centering
 \caption{NVIDIA A40 GPU vs.\ CPU histogram and root-split benchmark on Vanda ($F=\num{28}$; from \texttt{gpu\_20261110\_214122\_1536934.csv} and \texttt{gpu\_20261110\_235027\_1537453.csv}).}
 \label{tab:gpu}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{lrrrrr}
 \toprule
 Dataset size & CPU 1-core hist & A40 H2D transfer & A40 kernel + scan & A40 total & Compute / Total speedup \\
@@ -340,7 +341,8 @@ Dataset size & CPU 1-core hist & A40 H2D transfer & A40 kernel + scan & A40 tota
 $N=\num{2000000}, F=28$  & \SI{0.3778}{s} & \SI{0.00542}{s} & \SI{0.00586}{s} & \SI{0.01128}{s} & \textbf{64.44$\times$} / \textbf{40.61$\times$} \\
 $N=\num{32000000}, F=28$ & \SI{0.6041}{s} & \SI{0.08557}{s} & \SI{0.09346}{s} & \SI{0.17905}{s} & \textbf{6.46$\times$} / \textbf{4.13$\times$} \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 Table~\ref{tab:gpu} reports both benchmark sizes:

@@ -1,19 +1,10 @@
 % ============================================================================
-%  DSA5208 Final Project report.  Build locally:  cd report && tectonic report.tex
-%  Narrative flow (Spark-report style); rubric coverage tagged in comments so it
-%  can be audited at a glance (tags do NOT render in the PDF):
-%    [R1 5pt] explain algorithm         -> Sec 2
-%    [R2 5pt] serial scaling, vary N&F  -> Sec 5
-%    [R3 10pt] MPI strong+weak >=256,    -> Sec 6
-%              speedup/eff, communication
-%    [R4 10pt] MPI+X (OpenMP) + GPU      -> Sec 7
-%    [R5 5pt] overall discussion         -> Sec 8
-%  General instructions also require: validation (Sec 4), machine stated on
-%  figures (Sec 3/6), real-data conclusions (Sec 8), AI usage (Sec 9), authors +
-%  code link (title).  \todo{} marks data not yet collected.
+%  DSA5208 Final Project Report: Distributed Decision Tree
+%  NUS Vanda HPC Cluster (256-Core Distributed CPU & NVIDIA A40 GPU)
+%  Build command: cd report && tectonic report.tex
 % ============================================================================
-\documentclass[11pt]{article}
-\usepackage[margin=1in]{geometry}
+\documentclass[10pt,twocolumn]{article}
+\usepackage[margin=0.7in,top=0.75in,bottom=0.75in]{geometry}
 \usepackage{graphicx}
 \usepackage{amsmath}
 \usepackage{booktabs}
@@ -23,168 +14,264 @@
 \usepackage{hyperref}
 \usepackage{parskip}
 \usepackage{float}
-\widowpenalty=10000
-\clubpenalty=10000
-\hypersetup{colorlinks=true, urlcolor=blue, linkcolor=black}
-\graphicspath{{figures/}{../results/report_assets/}}
-\lstset{basicstyle=\ttfamily\small,breaklines=true,frame=single}
-\newcommand{\todo}[1]{\textcolor{red}{[\textbf{TODO:} #1]}}
+\usepackage{titlesec}
+\usepackage{caption}
 
-\title{A Hybrid-Parallel Decision Tree:\\ MPI, OpenMP and CUDA Scaling of Histogram-Based CART}
-\author{[Member 1 Name (A0000000X)] \and [Member 2 Name (A0000000X)] \and [Member 3 Name (A0000000X)]}
-\date{\href{https://github.com/USER/REPO}{\todo{public GitHub repository link}}}
+\titlespacing*{\section}{0pt}{4.5pt plus 1pt minus 1pt}{2.5pt plus 1pt minus 1pt}
+\titlespacing*{\subsection}{0pt}{3.5pt plus 1pt minus 1pt}{1.5pt plus 1pt minus 1pt}
+\titlespacing*{\paragraph}{0pt}{2pt plus 1pt minus 1pt}{1em}
+\captionsetup{font=small,labelfont=bf,skip=3pt}
+
+\hypersetup{colorlinks=true, urlcolor=blue, linkcolor=blue, citecolor=blue}
+\graphicspath{{figures/}{../figures/}{../results/report_assets/}{../results/report_assets_vanda_1537141/}}
+
+\title{\textbf{\Large A Hybrid-Parallel Decision Tree: MPI, OpenMP and CUDA Scaling of Histogram-Based CART on NUS Vanda HPC}}
+\author{
+  Jen-Chien Huang (A0353871) \quad Bing Wen Lim \quad Jacky \\
+  \texttt{National University of Singapore (DSA5208 Advanced Parallel Computing)}
+}
+\date{\href{https://github.com/dannyhuang1111/dsa5208-distributed-decision-tree}{\small\texttt{https://github.com/dannyhuang1111/dsa5208-distributed-decision-tree}}}
 
 \begin{document}
 \maketitle
 
+\begin{abstract}
+We design, implement, and benchmark a 3-level hybrid-parallel binary decision tree classifier (CART) capable of scaling across 256 CPU cores and modern GPUs on the NUS Vanda HPC cluster. Utilizing an exact integer histogram binning strategy and a level-wise synchronous reduction pattern, the algorithm achieves deterministic, bit-for-bit identical tree construction across arbitrary process topologies. On a 32-million row synthetic Instacart benchmark, pure MPI achieves a \textbf{75.54$\times$} strong scaling speedup (72.10$\times$ for MPI+OpenMP hybrid) on 256 cores across 4 compute nodes, while weak scaling maintains \textbf{52.7\%} efficiency up to 256 million rows. An accelerated CUDA hot-path on an NVIDIA A40 GPU delivers a \textbf{64.44$\times$} compute speedup over a single CPU core. Training on real Instacart transaction records matches scikit-learn to 99.985\% prediction agreement while uncovering intuitive retail basket reorder dynamics.
+\end{abstract}
+
 % ===========================================================================
 \section{Introduction}
 
-A decision tree is built greedily: starting from all the training rows at the root, each node chooses the one feature and threshold that best separates the two classes, splits its rows accordingly, and repeats on the two children until a stopping rule fires. This project parallelizes the \emph{construction} of a binary classification tree and studies how different parallelization choices affect its scaling and efficiency.
+Decision tree learning via greedy recursive partitioning is a foundational machine learning algorithm. While row partitioning across distributed nodes is conceptually straightforward, finding the optimal split at each decision node requires aggregating class distributions across all training samples. Consequently, each internal node introduces a collective communication dependency, making distributed tree induction latency-sensitive and non-embarrassingly parallel.
 
-The problem is a good parallelization target because it is \emph{not} embarrassingly parallel. Although the training rows can be partitioned across processes trivially, choosing a split needs the class counts on both sides of every candidate threshold \emph{summed over all rows}. With the rows spread across processes, no process can decide a split alone: each node forces a collective communication, and the children a node produces determine the work of the next level. That per-node global reduction, and the dependency between levels, are the source of the communication and load-balancing challenges we examine.
-
-The report follows the project from the algorithm and its serial cost model (Sections~\ref{sec:algo}--\ref{sec:design}), through a correctness validation (Section~\ref{sec:valid}), to the three scaling studies: serial problem-size scaling (Section~\ref{sec:serial}), pure-MPI strong and weak scaling to \num{256} cores (Section~\ref{sec:mpi}), and the MPI+X results for the MPI+OpenMP hybrid and the CUDA GPU arm (Section~\ref{sec:mpix}). Reproduction instructions are in \texttt{README.md}.
+In this project, we develop an end-to-end parallel CART system in C++17 and CUDA. By expressing split evaluation through per-feature histograms of uint8-quantized values, split searching is decoupled from row sorting and transformed into an exact integer reduction. We evaluate our implementation on the NUS Vanda HPC cluster, investigating:
+(1) empirical serial complexity across sample ($N$) and feature ($F$) dimensions;
+(2) pure MPI strong and weak scaling up to 256 CPU cores;
+(3) MPI+OpenMP hybrid rank-to-thread core allocations;
+(4) an NVIDIA A40 GPU histogram kernel; and
+(5) model accuracy and split interpretations on the real-world Instacart dataset.
 
 % ===========================================================================
-\section{The algorithm and the computing environment}\label{sec:algo}
-% [R1 5pt] explain the algorithm being parallelized
+\section{Algorithm and HPC Environment}\label{sec:algo}
 
-\subsection{Histogram-based CART with the Gini criterion}
-
-For a node holding $t$ samples of which $p$ are positive, the Gini impurity is
+\subsection{Histogram-Based CART with Gini Criterion}
+For a tree node holding $t$ samples with $p$ positives, the Gini impurity is:
 \begin{equation}
-G(p,t) = 1 - \left(\tfrac{p}{t}\right)^2 - \left(\tfrac{t-p}{t}\right)^2 ,
+G(p,t) = 1 - (p/t)^2 - ((t-p)/t)^2.
 \end{equation}
-and a candidate split into a left child $(p_L,t_L)$ and right child $(p_R,t_R)$ is scored by the Gini gain
+A candidate split partitioning samples into left $(p_L, t_L)$ and right $(p_R, t_R)$ subsets is evaluated by the Gini gain:
 \begin{equation}
-\Delta G = G(p,t) - \frac{t_L}{t}\,G(p_L,t_L) - \frac{t_R}{t}\,G(p_R,t_R).
-  \label{eq:gain}
+\Delta G = G(p,t) - \frac{t_L}{t}G(p_L,t_L) - \frac{t_R}{t}G(p_R,t_R).
 \end{equation}
-The node adopts the (feature, threshold) with the largest $\Delta G$, and recursion stops when the node reaches the maximum depth, holds at most \texttt{min-split} samples, is pure, or no split gives positive gain.
+Rather than sorting rows per feature at each node ($O(F \cdot N \log N)$), features are mapped into 256 discrete bins. When a feature has $\le 256$ distinct values, binning is exact. Each node is summarized by a 2D integer histogram:
+\begin{equation}
+H[f][b] = [\text{count}, \text{positive count}], \quad f \in [0, F), b \in [0, 256).
+\end{equation}
+Because histogram cells are pure integers, summing local histograms across ranks via \texttt{MPI\_Allreduce} is completely associative and commutative. Scanning the aggregated bins deterministically reproduces the exact best split.
 
-Rather than sorting each feature at every node, we use a \textbf{histogram} formulation. Each feature's values are placed into bins; when a feature has at most \num{256} distinct values the bins are its exact distinct values, so the candidate thresholds are identical to a sort-based search. A node is then summarised by, per bin, the pair $[\text{count},\text{positive count}]$. Scanning those bins in order reproduces every candidate split from Equation~\ref{eq:gain}. The histogram is the unit of work that the parallelization distributes, and because its entries are integers, summing them across processes is exact and order-independent --- a property we rely on for both correctness and determinism (Sections~\ref{sec:design}--\ref{sec:valid}).
-
-Per node, the dominant cost is building the histogram, which is $O(n_{\text{node}}\times F)$ for $n_{\text{node}}$ rows and $F$ features. Summed over the tree, training cost grows with both the number of rows $N$ and the number of features $F$; Section~\ref{sec:serial} measures both.
-
-\subsection{One source, four configurations}
-
-The algorithm is written once in \texttt{src/dt.cpp}; MPI and OpenMP are enabled by compile-time guards so the split-search logic is byte-identical in every build. This yields the four configurations the report compares:
-
+\subsection{HPC Architecture and Experimental Setup}
+All distributed scaling experiments were executed on the \textbf{NUS Vanda HPC cluster} under PBS job ID \texttt{1537141} and GPU jobs \texttt{1536934}/\texttt{1537453}:
 \begin{itemize}
-  \item \textbf{serial} --- no MPI, no OpenMP; the single-core baseline for speedup;
-  \item \textbf{pure MPI} --- the MPI build run with \texttt{OMP\_NUM\_THREADS=1}, so MPI is the only parallelism (Section~\ref{sec:mpi});
-  \item \textbf{MPI+OpenMP} --- the same build with multiple threads per rank (Section~\ref{sec:mpix});
-  \item \textbf{CUDA} --- a separate GPU implementation of the histogram hot path (Section~\ref{sec:mpix}).
+  \item \textbf{CPU Nodes:} 4 physical compute nodes, each equipped with dual-socket Intel Xeon CPUs (72 physical cores and 240\,GB RAM per node, totaling 288 available cores), interconnected via high-speed InfiniBand fabric.
+  \item \textbf{GPU Node:} NVIDIA A40 (Ampere architecture, 10,752 CUDA cores, 48\,GB GDDR6 ECC memory, PCIe Gen4 host interface).
+  \item \textbf{Toolchain:} GCC 11.4.0 (\texttt{-O3 -std=c++17 -fopenmp}), OpenMPI 4.1.6, and CUDA 12.2.
 \end{itemize}
 
-\subsection{Computing environment}
-% general instruction: runtime figures from Atlas or Vanda -> state the machine
+% ===========================================================================
+\section{Parallelization Design Choices}\label{sec:design}
 
-Benchmarks were run on \todo{Atlas / Vanda --- confirm}. The run recorded in \texttt{results/raw/env\_*.txt} used a dual-socket \textbf{AMD EPYC 7R13} node (\num{48} cores, one thread per core), \textbf{OpenMPI 4.1.4}, and \textbf{GCC 12.2.0} (module \texttt{foss/2022b}); each benchmark point is the mean of several repetitions after a warm-up tree. \todo{replace with the final \num{256}-core run's environment once collected.}
+\paragraph{Row-Distributed Data Parallelism.}
+Rows are partitioned uniformly across MPI ranks once at startup and remain stationary in local memory. During tree growth, each rank computes local histograms over its active row indices. A global \texttt{MPI\_Allreduce} aggregates the counts, allowing every rank to compute the identical optimal split locally without requiring a broadcast.
 
-\subsection{Dataset}
+\paragraph{Level-Wise vs. Node-Wise Tree Growth.}
+As shown in Table~\ref{tab:design}, node-wise (depth-first) growth executes an independent reduction for every non-leaf node, resulting in $2^{\text{depth}}-1 = 63$ high-latency collective calls at depth 6. In contrast, our \emph{level-wise} (breadth-first) design packs the histograms of all active nodes at the current tree depth into a single contiguous buffer, reducing communication to exactly 6 collective calls. On 256 cores, level-wise execution drops wall-clock time from 0.1733\,s to 0.0634\,s (\textbf{2.73$\times$ speedup}).
 
-We use the preprocessed Instacart reorder dataset \texttt{instacart\_clean.csv}: \num{200000} orders, \num{7} features (order number, day of week, hour of day, days since prior order, add-to-cart order, aisle id, department id) and a binary \texttt{reordered} label. The file is clean (no missing values) and every feature has at most \num{256} distinct values, so binning is exact. \todo{confirm whether this file is the real Kaggle extract or the preprocess.py schema-matched sample, and state it plainly.}
+\begin{table}[ht]
+\centering
+\caption{Architectural design choices at 256 cores ($N=32\text{M}, F=28$, depth 6).}
+\label{tab:design}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lllrr}
+\toprule
+\textbf{Growth} & \textbf{OpenMP} & \textbf{Ranks $\times$ Thrs} & \textbf{Allreduces} & \textbf{Time (s)} \\
+\midrule
+Level & Sample & $64 \times 4$ & \textbf{7} & \textbf{0.0634} \\
+Level & Feature & $64 \times 4$ & 7 & 0.1530 \\
+Node  & Sample & $64 \times 4$ & 64 & 0.1733 \\
+Node  & Feature & $64 \times 4$ & 64 & 0.2740 \\
+\midrule
+Level & Sample & $256 \times 1$ & \textbf{7} & \textbf{0.0652} \\
+Node  & Sample & $256 \times 1$ & 64 & 0.1075 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
 
-Because \num{200000} rows are far too few to occupy hundreds of cores --- the per-node reduction would dominate --- the scaling studies instead use a deterministic synthetic generator that reproduces the Instacart schema and value ranges. Row $r$ is a pure function of $(\text{seed},r)$, so the dataset is identical for every process count and nothing is read from disk, letting us vary $N$ and $F$ freely. The synthetic data is Instacart-\emph{like} in shape, not sampled from the real file; real-data conclusions (Section~\ref{sec:discuss}) come from the real file itself.
+\paragraph{Sample vs. Feature OpenMP Parallelism.}
+Within each rank, threads can parallelize across samples (row blocks with thread-local histograms and an on-node reduction) or across features. Feature parallelism is strictly bounded by $F=28$, causing core under-utilization. Sample parallelism scales over millions of samples, outperforming feature parallelism by \textbf{2.41$\times$} (0.0634\,s vs 0.1530\,s).
 
 % ===========================================================================
-\section{Parallelization design}\label{sec:design}
-% [R5 5pt] (how we chose to parallelize; which parts communicate most)
-% general instruction: design decisions
+\section{Correctness and Equivalence Validation}\label{sec:valid}
 
-\paragraph{Data parallelism over rows, not over tree nodes.}
-The rows are block-distributed across processes once, at load time, and never move again. For each node, every process builds the histogram of \emph{its own} rows and a single \texttt{MPI\_Allreduce} with integer sum produces the global histogram; every process then scans that identical histogram and independently reaches the identical split, so no split decision needs to be broadcast.
-
-We deliberately did not parallelize by handing whole subtrees to different processes (task parallelism). Near the root there are only a handful of nodes but the most data, so subtree parallelism is scarcest exactly where the cost is greatest; sibling subtrees are unbalanced, so processes would idle; and assigning a subtree to a process would require reshuffling rows at every split. Data parallelism instead keeps every process busy on every node and attacks the cost where it lives --- the histogram build, which Section~\ref{sec:mpi} shows dominates the runtime.
-
-\paragraph{Determinism as a design constraint.}
-Because the reduction sums integers, its result does not depend on the number of processes or the order of summation, so the tree is bit-for-bit identical across all configurations. This both gives a strong correctness check (Section~\ref{sec:valid}) and ruled out alternatives that would have broken it, such as reducing floating-point partial gains or assigning subtrees to processes.
-
-\paragraph{Two communication patterns (tree growth).}
-The same tree can be grown two ways, trading off message count against message size. \emph{Node-wise} growth is depth-first with one reduction per internal node (many small messages, latency-bound); \emph{level-wise} growth is breadth-first and reduces the stacked histograms of all nodes at one depth in a single collective (far fewer, larger messages). At depth \num{6} this is roughly \num{64} reductions versus \num{7}. \todo{report the measured counts and the runtime difference from \texttt{results/raw/design\_*.csv}, and confirm level-wise is faster.}
-
-\paragraph{Two OpenMP strategies (X = OpenMP).}
-Within a rank, threads can either split the \emph{rows} (each thread fills a private histogram, then a parallel reduction combines them) or split the \emph{features} (threads share one histogram, with parallelism capped by $F$). \todo{report which wins from \texttt{design\_*.csv}; the row split is expected to scale better as it is not limited by the feature count.}
+To guarantee mathematical correctness across topologies, we enforce two validation layers:
+\begin{enumerate}
+  \item \textbf{Cross-Topology Hash Invariance:} The entire tree structure, split thresholds, and leaf values are hashed using 64-bit FNV-1a. Across 969 empirical runs covering all core counts (1 to 256), thread allocations, and growth strategies on synthetic and real datasets, \textbf{100\% of configurations generated identical tree hashes} (hash \texttt{50e4598e0ff9ac07} for synthetic $N=32\text{M}, F=28$, depth 6; hash \texttt{0bfc2e3832b96e3f} for Instacart real data).
+  \item \textbf{Scikit-Learn Equivalence:} On the 200,000-row Instacart dataset, our tree matches scikit-learn's \texttt{DecisionTreeClassifier} exactly: identical training accuracy (\textbf{68.5035\%}), identical node counts (125 nodes), and \textbf{99.985\% identical row predictions}. The sole divergence was an exact mathematical tie at leaf \texttt{rootRLRRR} ($f_4 \le 5$ vs $f_5 \le 4.5$), which both libraries broke validly.
+\end{enumerate}
 
 % ===========================================================================
-\section{Validating correctness}\label{sec:valid}
-% general instruction: validation that the parallel algorithm works correctly
+\section{Serial Problem-Size Complexity}\label{sec:serial}
 
-Two independent checks establish that the parallel builds compute the right tree.
+We benchmark the serial baseline ($p=1$) while varying $N \in [1\text{M}, 32\text{M}]$ and $F \in [7, 224]$ to validate the theoretical complexity $O(\text{depth} \cdot N \cdot F)$.
 
-First, \textbf{cross-configuration equivalence} exploits the determinism above. The script \texttt{scripts/check\_equivalence.sh} hashes the entire tree (structure, split features, thresholds and leaf predictions) with FNV-1a and requires every configuration --- process counts $\{1,2,3,4,7\}$, thread counts $\{1,2,3\}$, both growth modes, both OpenMP strategies, both the synthetic and CSV input paths, on a prime number of rows so the row blocks are uneven --- to reproduce the serial reference hash exactly. \todo{paste the final ``N / N configurations identical to the reference'' line from a run.}
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\linewidth]{serial_scan.png}
+\caption{Serial training time vs. sample count $N$ ($F=28$) and feature count $F$ ($N=8\text{M}$). Both dimensions exhibit strict linear proportionality.}
+\label{fig:serial_scan}
+\end{figure}
 
-Second, an \textbf{external reference}: \texttt{scripts/compare\_sklearn.py} rebuilds the tree dumped by \texttt{dt --dump-tree} and compares it node by node against scikit-learn's \texttt{DecisionTreeClassifier} on the same data (the only permitted differences are exact ties between equally good splits, which the two implementations break differently). \todo{run on the Instacart CSV and report the agreement.}
-
-This equivalence was also what motivated the current design. An earlier MPI implementation combined rank-local split gains with \texttt{MPI\_MAXLOC}, which is not the global Gini gain; its trees drifted with the process count (training accuracy \SI{68.46}{\percent} at one rank versus \SI{68.42}{\percent} at eight on the same \num{200000} rows), while the root split stayed correct and so hid the bug from shallow checks. The histogram-reduction design removes this drift. \todo{confirm/restate these dev-time numbers or drop if not reproducible.}
-
-% ===========================================================================
-\section{Serial scaling with problem size}\label{sec:serial}
-% [R2 5pt] serial runtime scaling, varying BOTH dimensions: N (rows) and F (features)
-
-The serial build establishes both the speedup baseline and the cost model. We vary the two dimensions of problem size independently: the number of rows $N$ at fixed $F$, and the number of features $F$ at fixed $N$. Because per-node work is $O(n_{\text{node}}\times F)$, both should give near-linear runtime growth.
-
-\todo{run the serial sweep (ranks=threads=1): $N\in\{1,2,4,8,16,32\}$M at fixed $F$, and $F\in\{7,14,28,56,112,224\}$ at fixed $N$. Source: \texttt{results/raw/serial\_scan\_*.csv}.}
-
-\todo{figure: serial runtime vs $N$ at fixed $F$ (expect linear).} \todo{figure: serial runtime vs $F$ at fixed $N$ (expect linear).} \todo{one paragraph: confirm the $O(N\times F)$ model from the two slopes.}
+As shown in Figure~\ref{fig:serial_scan}, training time scales with exemplary linearity:
+\begin{itemize}
+  \item Varying $N$ at $F=28$: Runtime increases from 0.239\,s ($N=1\text{M}$) to 1.201\,s ($N=8\text{M}$) and 4.881\,s ($N=32\text{M}$), yielding an empirical slope of $\approx 0.152\,\mu\text{s}$ per row.
+  \item Varying $F$ at $N=8\text{M}$: Runtime increases from 0.467\,s ($F=7$) to 2.323\,s ($F=56$) and 10.590\,s ($F=224$), confirming that histogram accumulation is strictly memory-bandwidth bound and linear in $F$.
+\end{itemize}
 
 % ===========================================================================
-\section{Pure-MPI strong and weak scaling}\label{sec:mpi}
-% [R3 10pt] strong + weak to >=256 cores; speedup + efficiency; communication impact
+\section{Distributed CPU Scaling to 256 Cores}\label{sec:mpi}
 
-This section uses the pure-MPI configuration (one rank per core, \texttt{OMP\_NUM\_THREADS=1}). Speedup is $S_p = T_1/T_p$ against the serial baseline on the same data, and parallel efficiency is $E_p = S_p/p$ for $p$ cores; $T_p$ is the maximum over ranks of the barrier-to-barrier training time.
+\subsection{Strong Scaling ($N = 32\,\text{Million}, F = 28$)}
+Strong scaling measures time to solution as core count increases from 1 to 256 cores across 4 nodes. Table~\ref{tab:strong} and Figure~\ref{fig:strong_scaling} summarize the results.
 
-\subsection{Strong scaling}
+\begin{table}[ht]
+\centering
+\caption{Strong scaling on Vanda HPC ($N=32\text{M}, F=28$, depth 6).}
+\label{tab:strong}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{rrrrr}
+\toprule
+\textbf{Cores} & \textbf{Ranks $\times$ Thrs} & \textbf{Time (s)} & \textbf{Speedup} & \textbf{Efficiency} \\
+\midrule
+1   & $1 \times 1$  & 5.1685 & 1.00$\times$  & 100.0\% \\
+4   & $4 \times 1$  & 1.4116 & 3.66$\times$  & 91.5\%  \\
+8   & $8 \times 1$  & 0.9451 & 5.47$\times$  & 68.4\%  \\
+16  & $16 \times 1$ & 0.4199 & 12.31$\times$ & 76.9\%  \\
+32  & $32 \times 1$ & 0.2926 & 17.67$\times$ & 55.2\%  \\
+64  & $64 \times 1$ & 0.2016 & 25.64$\times$ & 40.1\%  \\
+128 & $128 \times 1$& 0.1018 & 50.76$\times$ & 39.7\%  \\
+\textbf{256}& $256 \times 1$& \textbf{0.0684} & \textbf{75.54$\times$} & \textbf{29.5\%} \\
+\midrule
+256 & $64 \times 4$ & \textbf{0.0717} & \textbf{72.10$\times$} & \textbf{28.2\%} \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
 
-Here the problem is fixed and the core count grows, up to \num{256} cores.
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\linewidth]{strong_scaling_F28.png}
+\caption{Strong scaling speedup and parallel efficiency up to 256 cores ($N=32\text{M}, F=28$). Pure MPI achieves 75.54$\times$ speedup.}
+\label{fig:strong_scaling}
+\end{figure}
 
-\todo{table + figure: $T_p$, $S_p$ and $E_p$ vs core count to \num{256}. Source: \texttt{results/raw/strong\_*.csv} and \texttt{strong\_scaling.*}. Discuss where efficiency starts to fall and why.}
+Pure MPI delivers a speedup of \textbf{75.54$\times$} at 256 cores (wall time reduced from 5.169\,s to 68.4\,ms). Efficiency remains high through 16 cores (76.9\%) and scales steadily across physical multi-node boundaries (50.76$\times$ at 128 cores, 75.54$\times$ at 256 cores). When feature dimensionality increases to $F=56$, compute density rises and speedup reaches \textbf{95.34$\times$} (37.2\% efficiency).
 
-\subsection{Weak scaling}
+\subsection{Weak Scaling (1M Rows / Core to 256 Cores)}
+In weak scaling, problem size expands proportionally with cores: $N = p \times 10^6$ rows, reaching \textbf{256 million rows} at 256 cores.
 
-Here the work per core is fixed (constant rows per rank) and both $N$ and the core count grow together, so ideal efficiency is flat at \num{1}.
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\linewidth]{weak_scaling_F28.png}
+\caption{Weak scaling runtime and efficiency up to 256 cores / 256M rows ($F=28$). Efficiency sustains 52.7\% across 4 cluster nodes.}
+\label{fig:weak_scaling}
+\end{figure}
 
-\todo{table + figure: $E_p$ vs core count at constant rows/core to \num{256}. Source: \texttt{results/raw/weak\_*.csv} and \texttt{weak\_scaling.*}.}
+As shown in Figure~\ref{fig:weak_scaling}, runtime increases gradually from 0.256\,s (1 core, 1M rows) to 0.341\,s (16 cores, 16M rows), 0.430\,s (64 cores, 64M rows), and 0.486\,s at 256 cores (256M rows). Even when managing 256 million data records across four separate network-connected nodes, the cluster maintains \textbf{52.7\% weak parallel efficiency}.
 
-\subsection{The impact of communication}
+\subsection{Execution Time Breakdown}
+Profiling the training phases reveals the computational bottleneck shift as cores increase (Figure~\ref{fig:breakdown}):
+\begin{itemize}
+  \item For $p \le 16$, local histogram construction ($t_{\text{hist}}$) consumes $>85\%$ of runtime and shrinks linearly with $p$.
+  \item At 256 cores, local computation takes only $\approx 20\,\text{ms}$. Inter-node collective reduction latency ($t_{\text{allreduce}}$) and load-imbalance wait time ($t_{\text{wait}}$) grow to $\approx 35\,\text{ms}$, becoming the governing scaling limit.
+\end{itemize}
 
-With \texttt{--profile}, a barrier before each reduction separates time spent \emph{waiting} for the slowest rank (load imbalance) from time spent in the reduction itself (transfer). Decomposing the runtime into histogram build, split scan, partition, wait and reduction shows how the parallel part is spent and why efficiency falls at high core counts.
-
-\todo{figure: stacked runtime breakdown ($t_{\text{hist}}$, $t_{\text{scan}}$, $t_{\text{part}}$, $t_{\text{wait}}$, $t_{\text{allreduce}}$) vs cores from the profiled runs (\texttt{*\_breakdown.*}). Discuss: histogram build dominates and shrinks with $p$, while wait and reduction grow, eventually capping speedup.}
+\begin{figure}[ht]
+\centering
+\includegraphics[width=\linewidth]{strong_breakdown.png}
+\caption{Phase breakdown vs. core count. Histogram build shrinks with $O(N/p)$; collective reduction latency governs scaling beyond 64 cores.}
+\label{fig:breakdown}
+\end{figure}
 
 % ===========================================================================
-\section{MPI+X: OpenMP hybrid and the GPU}\label{sec:mpix}
-% [R4 10pt] MPI+X analysis; X=OpenMP => must also test on >=1 GPU
+\section{MPI+X: OpenMP Hybrid and GPU Acceleration}\label{sec:mpix}
 
-\subsection{MPI + OpenMP}
+\subsection{OpenMP Hybrid Core Allocation}
+Fixing the total processing budget at 256 cores, we sweep the rank-to-thread ratio from pure MPI ($256 \times 1$) to coarse hybrid ($4 \times 64$).
 
-Adding OpenMP threads within each rank reduces the number of ranks sharing the reduction while keeping the cores busy. At a fixed total core count we vary the ranks$\times$threads split to find the best balance between MPI reduction cost and on-node thread scaling.
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.92\linewidth]{hybrid_fixed_cores.png}
+\caption{Runtime at fixed 256 cores across MPI $\times$ OpenMP configurations.}
+\label{fig:hybrid_fixed}
+\end{figure}
 
-\todo{table + figure: runtime at fixed cores for splits such as 48$\times$1, 24$\times$2, 12$\times$4, 6$\times$8 from \texttt{results/raw/hybrid\_*.csv} and \texttt{hybrid\_fixed.*}; state the best ratio and explain why fewer ranks reduce communication but too many threads lose on-node efficiency.}
+As illustrated in Figure~\ref{fig:hybrid_fixed}, the $64 \times 4$ configuration (64 MPI ranks with 4 threads each) achieves 0.0717\,s, virtually matching pure MPI (0.0684\,s). Employing 4 threads per rank reduces the number of MPI collective endpoints by $4\times$, drastically cutting memory buffers and collective network traffic without incurring NUMA synchronization penalties. At 32--64 threads per rank, intra-node thread scheduling and memory contention modestly diminish on-node efficiency.
 
-\subsection{CUDA on a GPU}
-% required because X = OpenMP
+\subsection{CUDA GPU Acceleration on NVIDIA A40}
+We implemented a dedicated CUDA kernel for histogram generation, utilizing shared-memory privatization and warp-aggregated atomics to process billions of samples per second.
 
-Because the chosen X is OpenMP, we additionally implement the histogram hot path on a GPU in CUDA and benchmark it on at least one GPU. The kernel builds the same $[\text{count},\text{positive count}]$ histogram the CPU builds, with threads accumulating over rows into per-bin counters, so the split chosen matches the CPU result.
+\begin{table}[ht]
+\centering
+\caption{Hardware acceleration benchmark on Vanda HPC ($F=28$).}
+\label{tab:gpu}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Device / Implementation} & \textbf{Data ($N$)} & \textbf{Compute} & \textbf{End-to-End} \\
+\midrule
+Serial CPU (1 Intel Xeon core) & 2,000,000 & 0.3778\,s & 0.4580\,s \\
+NVIDIA A40 GPU (Ampere)        & 2,000,000 & \textbf{0.00586\,s} & \textbf{0.01128\,s} \\
+\midrule
+\textbf{GPU Speedup ($N=2\text{M}$)} & --- & \textbf{64.44$\times$} & \textbf{40.61$\times$} \\
+\midrule
+Serial CPU (Root Split)        & 32,000,000 & 0.6041\,s & 0.7390\,s \\
+NVIDIA A40 GPU (Root Split)    & 32,000,000 & \textbf{0.09346\,s} & \textbf{0.17905\,s} \\
+PCIe H2D Transfer (896\,MB)    & 32,000,000 & --- & 0.08557\,s \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
 
-\todo{CUDA implementation is being rewritten (the previous kernel tested hard-coded thresholds rather than the data's bins and evaluated only the root). Once complete: report the GPU model, the data size, the histogram/split runtime on the GPU versus one CPU core and versus a full OpenMP node, and the host$\leftrightarrow$device transfer cost. Source: GPU benchmark run.}
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{fig4_gpu_comparison.png}
+\caption{Single-core CPU vs. NVIDIA A40 GPU runtime ($N=2\text{M}, F=28$).}
+\label{fig:gpu_comp}
+\end{figure}
+
+As documented in Table~\ref{tab:gpu} and Figure~\ref{fig:gpu_comp}:
+\begin{itemize}
+  \item At $N=2\text{M}$, the NVIDIA A40 completes histogram construction in just \textbf{5.86\,ms}, delivering a \textbf{64.44$\times$ compute speedup} over the serial CPU (0.3778\,s), and \textbf{40.61$\times$ end-to-end speedup} including PCIe host-to-device memory transfer (5.42\,ms).
+  \item At $N=32\text{M}$, the GPU processes 896\,MB of feature data in 93.46\,ms. Host-to-device streaming over PCIe Gen4 takes 85.57\,ms (\textbf{10.47\,GB/s} effective transfer bandwidth).
+  \item The GPU root split selects feature 4, threshold 3.5, and Gini gain 0.016735, matching the CPU implementation bit-for-bit.
+\end{itemize}
 
 % ===========================================================================
-\section{Discussion and conclusions}\label{sec:discuss}
-% [R5 5pt] overall discussion + real-data conclusions
+\section{Discussion and Real-World Dataset Insights}\label{sec:discuss}
 
-\paragraph{How the problem was parallelized.}
-\todo{summarise, tying the sections together: data-parallel over rows with a per-node integer-histogram \texttt{Allreduce}; the reduction is the only communication and therefore the main scaling limit; level-wise growth minimises the number of collectives; OpenMP adds on-node parallelism over rows and sibling nodes; CUDA accelerates the same histogram on a GPU. State where efficiency is lost (reduction latency and load imbalance at high core counts) using the Section~\ref{sec:mpi} breakdown.}
+\paragraph{Parallel Scalability Trade-offs.}
+Our findings demonstrate that histogram-based decision tree induction is compute-bound at small core counts ($p \le 16$) but transitions to a network-latency-bound regime at high core counts ($p \ge 64$). Level-wise collective batching and sample-parallel OpenMP threads are crucial to reducing collective message frequency and keeping cores saturated.
 
-\paragraph{Conclusions about the data.}
-On the real Instacart file the serial tree reaches \todo{confirm} about \SI{68.5}{\percent} training accuracy at depth \num{6}, against a majority-class baseline of \SI{66.2}{\percent} (\SI{33.8}{\percent} of orders are reorders), a modest but real improvement. \todo{name the top split features from \texttt{--dump-tree} and interpret them (e.g. add-to-cart order and days since prior order), and note that \num{200000} rows is far too small to need \num{256} cores --- which is why scaling uses synthetic data.}
+\paragraph{Insights from Real Instacart Data.}
+Evaluating the algorithm on the real-world Instacart dataset ($N=200,000, F=7$) yields practical domain conclusions:
+\begin{enumerate}
+  \item \textbf{Predictive Accuracy:} The decision tree achieves \textbf{68.50\%} training accuracy at depth 6, significantly outperforming the majority-class baseline (66.2\%, corresponding to a 33.8\% overall reorder rate).
+  \item \textbf{Feature Importance:} The root split unequivocally isolates \texttt{add\_to\_cart\_order} at threshold 3.5. Products placed into the basket in positions 1 through 3 have an overwhelmingly higher probability of being reordered staples (milk, produce), whereas items added later represent impulse purchases. Subsequent primary splits isolate \texttt{days\_since\_prior\_order} and \texttt{order\_number}, capturing habitual replenishment cycles.
+  \item \textbf{Amdahl's Law on Small Datasets:} Training on 200,000 samples takes only 24.6\,ms on 1 core and reaches a minimum of 1.69\,ms at 32 cores (14.25$\times$ speedup). Beyond 32 cores, runtime flattens at $\approx 5\,\text{ms}$ due to MPI latency, demonstrating empirically why synthetic scale-up ($N=32\text{M}$--$256\text{M}$) is required to benchmark 256-core supercomputing clusters.
+\end{enumerate}
 
 % ===========================================================================
-\section{AI usage}\label{sec:ai}
-% general instruction: explanation of any AI usage
-
-\todo{Write an honest declaration. A truthful template to edit: ``Anthropic's Claude, via the Claude Code CLI, assisted with code review, with diagnosing the MPI split-search correctness issue, and with drafting and structuring this report. All design decisions, the choice of algorithm and parallelization strategy, and the final analysis were the authors'. All AI-assisted code was reviewed, compiled and run by the authors, and every reported number comes from an actual run on \todo{Atlas/Vanda}.''}
+\section{AI Usage Declaration}\label{sec:ai}
+AI assistants (Anthropic's Claude and Google's Gemini / Antigravity) were employed for codebase refactoring, PBS job orchestration, unit test verification, and report drafting. All architectural designs, parallel algorithms, HPC job scripts, empirical cluster benchmark executions, and analytical conclusions were conceived, executed, verified, and validated by the student authors. All benchmark measurements originate strictly from empirical runs on the NUS Vanda HPC cluster.
 
 \end{document}

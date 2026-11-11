@@ -84,7 +84,7 @@ def check_trees(df, allow):
 
 
 def times(df, tags_pred):
-    d = df[(df.profile == 0) & df.tag.map(tags_pred)]
+    d = df[df.tag.notna() & (df.profile == 0) & df.tag.map(lambda x: bool(tags_pred(str(x))))]
     g = d.groupby(["tag", "ranks", "threads", "cores", "N", "F"])["t_total"].agg(["median", "min", "max", "count"]).reset_index()
     return g.rename(columns={"median": "t", "min": "tmin", "max": "tmax", "count": "n"})
 

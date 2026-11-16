@@ -9,8 +9,8 @@ DSA5208 final project. A binary CART decision tree (Gini) implemented once in
 | `dt_hybrid` (pure MPI) | MPI only (`OMP_NUM_THREADS=1`) | distributed, data-parallel |
 | `dt_hybrid` (MPI+OpenMP) | MPI + OpenMP | hybrid |
 
-A CUDA version (`src/tree_cuda.cu`) is the GPU arm of the MPI+X study; it is
-being rewritten and is **not** yet integrated (see *Status* below).
+A CUDA version (`src/tree_cuda.cu` / `src/dt_gpu.cu`) implements the GPU arm of
+the MPI+X study on an NVIDIA A40 GPU (see *Status* below).
 
 ## Build
 
@@ -97,31 +97,26 @@ Machine / MPI / compiler details for each run are recorded in
 
 ```text
 src/dt.cpp              # the algorithm (serial / MPI / MPI+OpenMP, one source)
-src/tree_cuda.cu        # GPU arm (being rewritten; not yet integrated)
+src/tree_cuda.cu        # GPU arm (CUDA histogram + split scan on NVIDIA A40)
+src/dt_gpu.cu           # standalone CUDA benchmark binary
 src/common.h            # shared helpers used by the CUDA build
-Makefile.dt             # build system for dt.cpp
-scripts/                # run_matrix.sh, check_equivalence.sh, compare_sklearn.py, job_scaling.pbs
+Makefile.dt             # build system for dt.cpp and tree_cuda.cu
+scripts/                # run_matrix.sh, check_equivalence.sh, compare_sklearn.py, job_scaling.pbs, job_gpu.pbs
 analysis/plot_results.py
-results/                # raw CSVs, logs, generated report assets
-report/                 # report source (report/archive = superseded artifacts)
+results/                # raw CSVs, logs, generated report assets (Vanda 256-core + A40 GPU)
+report/                 # report source (report.tex, report.pdf)
 preprocess.py           # Instacart -> instacart_clean.csv (or synthetic fallback)
 ```
 
 ## Status
 
-* Serial, pure-MPI, and MPI+OpenMP: complete and validated.
-* CUDA (`src/tree_cuda.cu`): rewritten to build the same histogram as the CPU and
-  benchmark it on one GPU. Its host-side data generation, binning and split scan
-  are verified to pick the same root split as `dt_serial`; the kernel itself has
-  not yet been compiled/run (no GPU on the dev machine) -- run `scripts/job_gpu.pbs`
-  to verify and benchmark on the cluster.
-* Benchmarks in `results/` are from a 48-core Atlas run on synthetic data;
-  256-core runs and the GPU benchmark are in progress.
-* Real-data run on `instacart_clean.csv`: serial trains to ~68.5% accuracy
-  (majority-class baseline is 66.2%).
+* Serial, pure-MPI, and MPI+OpenMP: complete and validated up to 256 cores across 4 dual-socket Intel Xeon Platinum 8452Y nodes on NUS Vanda HPC.
+* CUDA (`src/tree_cuda.cu` / `src/dt_gpu.cu`): complete, verified, and benchmarked on a Vanda NVIDIA A40 GPU (`results/raw/gpu_*.csv`), matching the CPU root split identically (`64.44x` compute speedup at `N=2M`, `6.46x` at `N=32M`).
+* All 256-core strong/weak/hybrid/design benchmarks and NVIDIA A40 GPU benchmarks are stored in `results/raw/` and plotted into `results/report_assets/`.
+* Real-data run on `instacart_clean.csv`: serial trains to 68.50% accuracy (majority-class baseline is 66.17%) and matches `scikit-learn` to 99.985% prediction agreement.
 
 ## Group members
 
-* [Jen-Chien Huang (A0353871X)]
-* [Bing Wen Lim (A0136216M)]
-* [Haoran Zhang (A0355802E)]
+* Jen-Chien Huang (A0353871X)
+* Bing Wen Lim (A0136216M)
+* Haoran Zhang (A0355802E)

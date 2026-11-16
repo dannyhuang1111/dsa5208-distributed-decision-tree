@@ -122,6 +122,6 @@ preprocess.py           # Instacart -> instacart_clean.csv (or synthetic fallbac
 
 ## Group members
 
-* [Member 1 Name — Student ID]
-* [Member 2 Name — Student ID]
-* [Member 3 Name — Student ID]
+* [Jen-Chien Huang (A0353871X)]
+* [Bing Wen Lim (A0136216M)]
+* [Haoran Zhang (A0355802E)]

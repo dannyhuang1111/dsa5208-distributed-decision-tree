@@ -34,7 +34,7 @@ build/dt_serial --synthetic 5000000 --features 28
 # 8 ranks x 4 threads, level-wise growth, profiled (barrier before each Allreduce)
 OMP_NUM_THREADS=4 mpirun -np 8 build/dt_hybrid --synthetic 5000000 --features 28 --profile 1
 
-# real data: CSV with the label in column 1 and a header row (preprocess.py output)
+# CSV input path: label in column 1, header row (preprocess.py output)
 OMP_NUM_THREADS=2 mpirun -np 4 build/dt_hybrid --csv instacart_clean.csv
 ```
 
@@ -62,7 +62,7 @@ Two orthogonal parallelization axes are studied:
 * `--omp feature` — threads split features, shared histogram (limited by F).
 
 Features are binned by distinct value: exact (same candidate thresholds as a
-sort) when a feature has <= 256 distinct values, which holds for Instacart;
+sort) when a feature has <= 256 distinct values, which holds for this dataset;
 otherwise quantile bins are used and `APPROXIMATE bins` is printed.
 
 ## Validation
@@ -105,7 +105,7 @@ scripts/                # run_matrix.sh, check_equivalence.sh, compare_sklearn.p
 analysis/plot_results.py
 results/                # raw CSVs, logs, generated report assets (Vanda 256-core + A40 GPU)
 report/                 # report source (report.tex, report.pdf)
-preprocess.py           # Instacart -> instacart_clean.csv (or synthetic fallback)
+preprocess.py           # generates the synthetic instacart_clean.csv sample
 ```
 
 ## Status
@@ -113,7 +113,7 @@ preprocess.py           # Instacart -> instacart_clean.csv (or synthetic fallbac
 * Serial, pure-MPI, and MPI+OpenMP: complete and validated up to 256 cores across 4 dual-socket Intel Xeon Platinum 8452Y nodes on NUS Vanda HPC.
 * CUDA (`src/tree_cuda.cu` / `src/dt_gpu.cu`): complete, verified, and benchmarked on a Vanda NVIDIA A40 GPU (`results/raw/gpu_*.csv`), matching the CPU root split identically (`64.44x` compute speedup at `N=2M`, `6.46x` at `N=32M`).
 * All 256-core strong/weak/hybrid/design benchmarks and NVIDIA A40 GPU benchmarks are stored in `results/raw/` and plotted into `results/report_assets/`.
-* Real-data run on `instacart_clean.csv`: serial trains to 68.50% accuracy (majority-class baseline is 66.17%) and matches `scikit-learn` to 99.985% prediction agreement.
+* Single-node run on the 200k-row `instacart_clean.csv` sample: serial trains to 68.50% accuracy (majority-class baseline is 66.17%) and matches `scikit-learn` to 99.985% prediction agreement.
 
 ## Group members
 

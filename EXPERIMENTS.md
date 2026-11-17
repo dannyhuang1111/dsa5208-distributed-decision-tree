@@ -42,7 +42,7 @@ Only the two MPI configs have a "number of cores" axis, so only they are
 
 ## Varying F (feature count)
 
-F is the number of feature columns of the synthetic dataset (the 7 Instacart
+F is the number of feature columns of the synthetic dataset (7 Instacart-shaped
 feature domains, cycled when F>7). Required by the rubric for serial; we also
 sweep it in strong+weak scaling to show the scaling is F-stable. hybrid and
 design keep F fixed (F does not change their conclusion).
@@ -85,12 +85,12 @@ core; against a full node the margin is smaller and may be dominated by
 host<->device transfer, so a GPU pays off when data stays resident and is reused
 across many node splits rather than for a single histogram.
 
-## Real data
+## Single-node CSV run
 
-One serial run on `instacart_clean.csv` (200k rows, real 7 features) for the
-"conclusions about the data" section: accuracy vs the 66.2% majority-class
-baseline (serial gives ~68.5%). Too small for 256-core scaling, hence synthetic
-data for all scaling studies.
+One serial run on the 200k-row `instacart_clean.csv` sample (7 features) for the
+"learned model" section: accuracy vs the 66.2% majority-class baseline (serial
+gives ~68.5%). Too small for 256-core scaling, hence the on-the-fly synthetic
+generator for all scaling studies.
 
 ## How it runs
 

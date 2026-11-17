@@ -1,11 +1,9 @@
-import os
-import sys
 import numpy as np
 import pandas as pd
 
 def generate_synthetic_data(filename="instacart_clean.csv", n_samples=100000, n_features=7):
     """
-    如果用戶還沒下載 Kaggle 原始檔案，先自動生成符合 Instacart 格式的合成資料供立即測試編譯與執行
+    生成符合 Instacart 格式的合成資料集，供編譯驗證與單機 CSV 執行使用。
     特徵欄位：
     0: label (reordered: 0 or 1)
     1: order_number (用戶累計下單數)
@@ -27,7 +25,7 @@ def generate_synthetic_data(filename="instacart_clean.csv", n_samples=100000, n_
     aisle = np.random.randint(1, 135, size=n_samples)
     department = np.random.randint(1, 22, size=n_samples)
     
-    # 模擬真實購物規律：加購物車順序小且間隔接近 7 天的更容易回購
+    # 合成購物規律：加購物車順序小且間隔接近 7 天的更容易回購
     prob = 0.3 + 0.3 * (add_to_cart <= 3) + 0.2 * (days_since == 7)
     prob = np.clip(prob, 0.05, 0.95)
     reordered = (np.random.rand(n_samples) < prob).astype(int)
@@ -46,12 +44,12 @@ def generate_synthetic_data(filename="instacart_clean.csv", n_samples=100000, n_
     df.to_csv(filename, index=False)
     print(f"[+] 合成資料生成完畢：{filename} (筆數: {n_samples}, 特徵數: {n_features})")
 
-def process_kaggle_data(orders_path='orders.csv', 
-                        order_products_path='order_products__train.csv', 
+def process_kaggle_data(orders_path='orders.csv',
+                        order_products_path='order_products__train.csv',
                         products_path='products.csv',
                         output_path='instacart_clean.csv'):
-    """處理真實 Kaggle 下載檔案"""
-    print(f"[*] 正在讀取並合併 Kaggle Instacart 資料表...")
+    """選用：若本地存在 Instacart 格式的來源 CSV，將其合併為相同 schema 的輸出檔。"""
+    print(f"[*] 正在讀取並合併來源 Instacart 格式資料表...")
     orders = pd.read_csv(orders_path)
     order_products = pd.read_csv(order_products_path)
     products = pd.read_csv(products_path)
@@ -68,11 +66,9 @@ def process_kaggle_data(orders_path='orders.csv',
     
     final_df = df[['reordered'] + features].astype(float)
     final_df.to_csv(output_path, index=False)
-    print(f"[+] 真實資料處理完畢：{output_path} (共 {len(final_df)} 筆資料)")
+    print(f"[+] 資料合併完畢：{output_path} (共 {len(final_df)} 筆資料)")
 
 if __name__ == '__main__':
-    if os.path.exists('orders.csv') and os.path.exists('order_products__train.csv'):
-        process_kaggle_data()
-    else:
-        # 如果還沒下載，預設產生 20 萬筆合成資料供開發與編譯驗證
-        generate_synthetic_data('instacart_clean.csv', n_samples=200000)
+    # 預設產生 20 萬筆合成資料（編譯驗證與單機 CSV 執行用）。
+    # 選用路徑：若本地另有 Instacart 格式來源 CSV，可改呼叫 process_kaggle_data()。
+    generate_synthetic_data('instacart_clean.csv', n_samples=200000)

@@ -16,7 +16,7 @@
 #   weak    N grows with the core count (N_PER_RANK rows per rank, per core for hybrid)
 #   hybrid  fixed core count HYBRID_CORES, vary ranks x threads
 #   design  growth node|level  x  omp sample|feature, at two configurations
-#   real    strong scaling on a real CSV (set REAL_CSV=/path/instacart_clean.csv)
+#   real    strong scaling on a CSV file (set REAL_CSV=/path/instacart_clean.csv)
 #
 # Every configuration is run REPS times inside one process (after a warm-up tree)
 # without profiling, and PROF_REPS times with --profile 1 (barrier before each
